@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "test:watch": "vitest" 
   },
   "keywords": [],
   "author": "",
@@ -15,5 +16,13 @@
     "dotenv": "^18.0.3",
     "express": "^5.2.1",
     "mongoose": "^9.10.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@vitest/coverage-v8": "^5.0.1",
+    "mongodb-memory-server": "^11.3.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   }
 }
