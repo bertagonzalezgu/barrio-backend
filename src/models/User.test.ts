@@ -1,6 +1,10 @@
 import { User } from '../models/User';
 
 describe('User model', () => {
+  beforeAll(async () => {
+    await User.init();
+  });
+
   it('crea un usuario válido con los campos requeridos', async () => {
     const user = await User.create({
       firebaseUid: 'uid-test-001',
