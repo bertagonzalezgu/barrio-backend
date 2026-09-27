@@ -47,7 +47,8 @@ const UserSchema = new Schema<IUser>(
     },
     creditos: {
       type: Number,
-      default: 2,
+      // Empieza en 0: las 2h de regalo las concede grantWelcomeCredit junto a su Transaction.
+      default: 0,
       min: 0,
     },
     fechaRegistro: {

@@ -1,16 +1,17 @@
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 
-let mongod: MongoMemoryServer;
+// Replica set (no standalone): las transacciones multi-documento de MongoDB solo funcionan en replica sets.
+let replSet: MongoMemoryReplSet;
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
-  await mongoose.connect(mongod.getUri());
+  replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
+  await mongoose.connect(replSet.getUri());
 });
 
 afterAll(async () => {
   await mongoose.disconnect();
-  await mongod.stop();
+  await replSet.stop();
 });
 
 afterEach(async () => {

@@ -41,6 +41,7 @@ const run = async (): Promise<void> => {
   });
 
   const testTx = await Transaction.create({
+    tipo: 'intercambio',
     ticketId: testTicket._id,
     deUserId: testUserB._id, 
     aUserId: testUser._id,  

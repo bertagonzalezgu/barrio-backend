@@ -8,7 +8,7 @@ describe('User model', () => {
       email: 'ana@barrio.local',
     });
     expect(user._id).toBeDefined();
-    expect(user.creditos).toBe(2);
+    expect(user.creditos).toBe(0);
     expect(user.verificado).toBe(false);
     expect(user.rating).toBe(0);
   });
