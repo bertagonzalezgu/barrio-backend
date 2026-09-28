@@ -10,44 +10,44 @@ const run = async (): Promise<void> => {
 
   const testUser = await User.create({
     firebaseUid: 'test-firebase-uid-001',
-    nombre: 'Ana Test',
+    name: 'Ana Test',
     email: 'ana.test@barrio.local',
     avatar: '',
-    verificado: false,
+    verified: false,
     rating: 0,
-    creditos: 2,
+    credits: 2,
   });
-  console.log(`✅ User creado:       _id=${testUser._id}  nombre="${testUser.nombre}"  creditos=${testUser.creditos}h`);
+  console.log(`✅ User creado:       _id=${testUser._id}  name="${testUser.name}"  credits=${testUser.credits}h`);
 
   const testTicket = await Ticket.create({
-    autorId: testUser._id,
-    tipo: 'ofrezco',
-    titulo: 'Ayudo con mudanzas ligeras',
-    descripcion: 'Puedo ayudarte a mover cajas y muebles pequeños por el barrio.',
-    categoria: 'Hogar',
-    horas: 2,
-    icono: 'truck',
+    authorId: testUser._id,
+    type: 'offer',
+    title: 'Ayudo con mudanzas ligeras',
+    description: 'Puedo ayudarte a mover cajas y muebles pequeños por el barrio.',
+    category: 'home',
+    hours: 2,
+    icon: 'truck',
     lat: 41.3851,
     lng: 2.1734,
-    estado: 'activo',
+    status: 'active',
   });
-  console.log(`✅ Ticket creado:     _id=${testTicket._id}  tipo="${testTicket.tipo}"  categoria="${testTicket.categoria}"`);
+  console.log(`✅ Ticket creado:     _id=${testTicket._id}  type="${testTicket.type}"  category="${testTicket.category}"`);
 
   const testUserB = await User.create({
     firebaseUid: 'test-firebase-uid-002',
-    nombre: 'Berta Test',
+    name: 'Berta Test',
     email: 'berta.test@barrio.local',
-    creditos: 5,
+    credits: 5,
   });
 
   const testTx = await Transaction.create({
-    tipo: 'intercambio',
+    type: 'exchange',
     ticketId: testTicket._id,
-    deUserId: testUserB._id, 
-    aUserId: testUser._id,  
-    horas: 2,
+    fromUserId: testUserB._id,
+    toUserId: testUser._id,
+    hours: 2,
   });
-  console.log(`✅ Transaction creada: _id=${testTx._id}  de=${testUserB.nombre} → a=${testUser.nombre}  horas=${testTx.horas}`);
+  console.log(`✅ Transaction creada: _id=${testTx._id}  from=${testUserB.name} → to=${testUser.name}  hours=${testTx.hours}`);
 
   await Transaction.deleteOne({ _id: testTx._id });
   await Ticket.deleteOne({ _id: testTicket._id });

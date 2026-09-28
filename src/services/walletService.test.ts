@@ -4,7 +4,7 @@ import { Transaction } from '../models/Transaction';
 import { grantWelcomeCredit, getBalance, WELCOME_CREDIT_HOURS } from './walletService';
 
 async function createUser(firebaseUid = 'uid-wallet-001') {
-  return User.create({ firebaseUid, nombre: 'Ana', email: `${firebaseUid}@barrio.local` });
+  return User.create({ firebaseUid, name: 'Ana', email: `${firebaseUid}@barrio.local` });
 }
 
 describe('walletService', () => {
@@ -19,12 +19,12 @@ describe('walletService', () => {
       const granted = await grantWelcomeCredit(user._id);
 
       expect(granted).toBe(true);
-      const txs = await Transaction.find({ aUserId: user._id });
+      const txs = await Transaction.find({ toUserId: user._id });
       expect(txs).toHaveLength(1);
-      expect(txs[0].tipo).toBe('bienvenida');
-      expect(txs[0].horas).toBe(WELCOME_CREDIT_HOURS);
+      expect(txs[0].type).toBe('welcome');
+      expect(txs[0].hours).toBe(WELCOME_CREDIT_HOURS);
       const updated = await User.findById(user._id);
-      expect(updated?.creditos).toBe(2);
+      expect(updated?.credits).toBe(2);
     });
 
     it('es idempotente: una segunda llamada no crea otra transacción ni suma horas', async () => {
@@ -34,8 +34,8 @@ describe('walletService', () => {
       const grantedAgain = await grantWelcomeCredit(user._id);
 
       expect(grantedAgain).toBe(false);
-      expect(await Transaction.countDocuments({ aUserId: user._id })).toBe(1);
-      expect((await User.findById(user._id))?.creditos).toBe(2);
+      expect(await Transaction.countDocuments({ toUserId: user._id })).toBe(1);
+      expect((await User.findById(user._id))?.credits).toBe(2);
     });
 
     it('es idempotente también con llamadas simultáneas', async () => {
@@ -48,15 +48,15 @@ describe('walletService', () => {
       ]);
 
       expect(results.filter(Boolean)).toHaveLength(1);
-      expect(await Transaction.countDocuments({ aUserId: user._id })).toBe(1);
-      expect((await User.findById(user._id))?.creditos).toBe(2);
+      expect(await Transaction.countDocuments({ toUserId: user._id })).toBe(1);
+      expect((await User.findById(user._id))?.credits).toBe(2);
     });
 
     it('lanza error y no deja una transacción huérfana si el usuario no existe', async () => {
       const ghostId = new Types.ObjectId();
 
       await expect(grantWelcomeCredit(ghostId)).rejects.toThrow();
-      expect(await Transaction.countDocuments({ aUserId: ghostId })).toBe(0);
+      expect(await Transaction.countDocuments({ toUserId: ghostId })).toBe(0);
     });
   });
 

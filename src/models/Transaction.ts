@@ -1,49 +1,48 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
-export type TransactionTipo = 'bienvenida' | 'intercambio';
+export type TransactionType = 'welcome' | 'exchange';
 
 export interface ITransaction extends Document {
-  tipo: TransactionTipo;
+  type: TransactionType;
   ticketId?: Types.ObjectId;
-  deUserId?: Types.ObjectId;
-  aUserId: Types.ObjectId;
-  horas: number;
-  fecha: Date;
+  fromUserId?: Types.ObjectId;
+  toUserId: Types.ObjectId;
+  hours: number;
+  date: Date;
 }
 
-function isIntercambio(this: ITransaction): boolean {
-  return this.tipo === 'intercambio';
+function isExchange(this: ITransaction): boolean {
+  return this.type === 'exchange';
 }
 
 const TransactionSchema = new Schema<ITransaction>(
   {
-    tipo: {
+    type: {
       type: String,
-      enum: ['bienvenida', 'intercambio'] satisfies TransactionTipo[],
+      enum: ['welcome', 'exchange'] satisfies TransactionType[],
       required: true,
     },
-    // Solo los intercambios nacen de un ticket y tienen emisor; el regalo de bienvenida no.
     ticketId: {
       type: Schema.Types.ObjectId,
       ref: 'Ticket',
-      required: isIntercambio,
+      required: isExchange,
     },
-    deUserId: {
+    fromUserId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
-      required: isIntercambio,
+      required: isExchange,
     },
-    aUserId: {
+    toUserId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
     },
-    horas: {
+    hours: {
       type: Number,
       required: true,
       min: 1,
     },
-    fecha: {
+    date: {
       type: Date,
       default: Date.now,
     },
@@ -53,14 +52,12 @@ const TransactionSchema = new Schema<ITransaction>(
   }
 );
 
-TransactionSchema.index({ deUserId: 1, fecha: -1 });
-TransactionSchema.index({ aUserId: 1, fecha: -1 });
+TransactionSchema.index({ fromUserId: 1, date: -1 });
+TransactionSchema.index({ toUserId: 1, date: -1 });
 
-// Garantiza a nivel de base de datos un único regalo de bienvenida por usuario,
-// incluso con peticiones simultáneas (base de la idempotencia de grantWelcomeCredit).
 TransactionSchema.index(
-  { aUserId: 1 },
-  { unique: true, partialFilterExpression: { tipo: 'bienvenida' }, name: 'unique_welcome_per_user' }
+  { toUserId: 1 },
+  { unique: true, partialFilterExpression: { type: 'welcome' }, name: 'unique_welcome_per_user' }
 );
 
 export const Transaction = model<ITransaction>('Transaction', TransactionSchema);

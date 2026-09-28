@@ -1,74 +1,74 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
-export type TicketTipo = 'busco' | 'ofrezco';
+export type TicketType = 'request' | 'offer';
 
-export type TicketCategoria =
-  | 'Hogar'
-  | 'Cuidados'
-  | 'Digital'
-  | 'Comunidad'
-  | 'Aprendizaje';
+export type TicketCategory =
+  | 'home'
+  | 'care'
+  | 'digital'
+  | 'community'
+  | 'learning';
 
-export type TicketEstado = 'activo' | 'completado' | 'denunciado';
+export type TicketStatus = 'active' | 'completed' | 'reported';
 
 
 export interface ITicket extends Document {
-  autorId: Types.ObjectId;
-  tipo: TicketTipo;
-  titulo: string;
-  descripcion: string;
-  categoria: TicketCategoria;
-  horas: number;
-  icono: string;
+  authorId: Types.ObjectId;
+  type: TicketType;
+  title: string;
+  description: string;
+  category: TicketCategory;
+  hours: number;
+  icon: string;
   lat?: number;
   lng?: number;
-  fecha?: Date;
-  estado: TicketEstado;
+  date?: Date;
+  status: TicketStatus;
 }
 
 
 const TicketSchema = new Schema<ITicket>(
   {
-    autorId: {
+    authorId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
     },
-    tipo: {
+    type: {
       type: String,
-      enum: ['busco', 'ofrezco'] satisfies TicketTipo[],
+      enum: ['request', 'offer'] satisfies TicketType[],
       required: true,
     },
-    titulo: {
+    title: {
       type: String,
       required: true,
       trim: true,
       maxlength: 120,
     },
-    descripcion: {
+    description: {
       type: String,
       required: true,
       trim: true,
       maxlength: 1000,
     },
-    categoria: {
+    category: {
       type: String,
       enum: [
-        'Hogar',
-        'Cuidados',
-        'Digital',
-        'Comunidad',
-        'Aprendizaje',
-      ] satisfies TicketCategoria[],
+        'home',
+        'care',
+        'digital',
+        'community',
+        'learning',
+      ] satisfies TicketCategory[],
       required: true,
     },
-    horas: {
+    hours: {
       type: Number,
       required: true,
       min: 1,
       max: 40,
     },
-    icono: {
+    icon: {
       type: String,
       default: '',
     },
@@ -78,13 +78,13 @@ const TicketSchema = new Schema<ITicket>(
     lng: {
       type: Number,
     },
-    fecha: {
+    date: {
       type: Date,
     },
-    estado: {
+    status: {
       type: String,
-      enum: ['activo', 'completado', 'denunciado'] satisfies TicketEstado[],
-      default: 'activo',
+      enum: ['active', 'completed', 'reported'] satisfies TicketStatus[],
+      default: 'active',
     },
   },
   {
@@ -92,8 +92,8 @@ const TicketSchema = new Schema<ITicket>(
   }
 );
 
-TicketSchema.index({ estado: 1, lat: 1, lng: 1 });
+TicketSchema.index({ status: 1, lat: 1, lng: 1 });
 
-TicketSchema.index({ categoria: 1, estado: 1 });
+TicketSchema.index({ category: 1, status: 1 });
 
 export const Ticket = model<ITicket>('Ticket', TicketSchema);

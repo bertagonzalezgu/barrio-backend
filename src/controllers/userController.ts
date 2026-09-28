@@ -7,19 +7,19 @@ export async function registerCurrentUser(req: Request, res: Response): Promise<
     return;
   }
 
-  const { uid, email, name } = req.user;
+  const { uid, email, name: tokenName } = req.user;
   if (!email) {
     res.status(400).json({ error: 'La cuenta de Firebase no tiene email' });
     return;
   }
 
-  const bodyNombre: unknown = req.body?.nombre;
-  const nombre = typeof bodyNombre === 'string' && bodyNombre.trim() ? bodyNombre.trim() : name;
+  const bodyName: unknown = req.body?.name;
+  const name = typeof bodyName === 'string' && bodyName.trim() ? bodyName.trim() : tokenName;
 
   const result = await registerUser({
     firebaseUid: uid,
     email,
-    nombre: typeof nombre === 'string' ? nombre : undefined,
+    name: typeof name === 'string' ? name : undefined,
   });
 
   if (!result.ok) {

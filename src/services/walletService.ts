@@ -23,12 +23,12 @@ export async function grantWelcomeCredit(userId: Types.ObjectId): Promise<boolea
   try {
     await session.withTransaction(async () => {
       await Transaction.create(
-        [{ tipo: 'bienvenida', aUserId: userId, horas: WELCOME_CREDIT_HOURS }],
+        [{ type: 'welcome', toUserId: userId, hours: WELCOME_CREDIT_HOURS }],
         { session }
       );
       const { matchedCount } = await User.updateOne(
         { _id: userId },
-        { $inc: { creditos: WELCOME_CREDIT_HOURS } },
+        { $inc: { credits: WELCOME_CREDIT_HOURS } },
         { session }
       );
       if (matchedCount === 0) {
@@ -45,6 +45,6 @@ export async function grantWelcomeCredit(userId: Types.ObjectId): Promise<boolea
 }
 
 export async function getBalance(firebaseUid: string): Promise<number | null> {
-  const user = await User.findOne({ firebaseUid }, { creditos: 1 }).lean();
-  return user ? user.creditos : null;
+  const user = await User.findOne({ firebaseUid }, { credits: 1 }).lean();
+  return user ? user.credits : null;
 }

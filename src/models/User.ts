@@ -2,13 +2,13 @@ import { Schema, model, Document } from 'mongoose';
 
 export interface IUser extends Document {
   firebaseUid: string;
-  nombre: string;
+  name: string;
   email: string;
   avatar: string;
-  verificado: boolean;
+  verified: boolean;
   rating: number;
-  creditos: number;
-  fechaRegistro: Date;
+  credits: number;
+  registeredAt: Date;
 }
 
 const UserSchema = new Schema<IUser>(
@@ -18,7 +18,7 @@ const UserSchema = new Schema<IUser>(
       required: true,
       unique: true,
     },
-    nombre: {
+    name: {
       type: String,
       required: true,
       trim: true,
@@ -35,7 +35,7 @@ const UserSchema = new Schema<IUser>(
       type: String,
       default: '',
     },
-    verificado: {
+    verified: {
       type: Boolean,
       default: false,
     },
@@ -45,13 +45,12 @@ const UserSchema = new Schema<IUser>(
       min: 0,
       max: 5,
     },
-    creditos: {
+    credits: {
       type: Number,
-      // Empieza en 0: las 2h de regalo las concede grantWelcomeCredit junto a su Transaction.
       default: 0,
       min: 0,
     },
-    fechaRegistro: {
+    registeredAt: {
       type: Date,
       default: Date.now,
     },

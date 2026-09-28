@@ -20,8 +20,8 @@ describe('GET /api/wallet/balance', () => {
   });
 
   it('devuelve el saldo del usuario autenticado', async () => {
-    await User.create({ firebaseUid: 'uid-ana', nombre: 'Ana', email: 'ana@barrio.local', creditos: 5 });
-    await User.create({ firebaseUid: 'uid-otra', nombre: 'Otra', email: 'otra@barrio.local', creditos: 9 });
+    await User.create({ firebaseUid: 'uid-ana', name: 'Ana', email: 'ana@barrio.local', credits: 5 });
+    await User.create({ firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local', credits: 9 });
     mockVerifyIdToken.mockResolvedValueOnce({ uid: 'uid-ana' } as never);
 
     const res = await request(app)
@@ -29,7 +29,7 @@ describe('GET /api/wallet/balance', () => {
       .set('Authorization', 'Bearer token-valido');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ creditos: 5 });
+    expect(res.body).toEqual({ credits: 5 });
   });
 
   it('devuelve 404 si el usuario de Firebase no está registrado en la base de datos', async () => {
