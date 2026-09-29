@@ -38,3 +38,8 @@ export async function registerUser({ firebaseUid, email, name }: RegisterUserInp
 
   return { ok: true, user };
 }
+
+export async function getUserName(firebaseUid: string): Promise<string | null> {
+  const user = await User.findOne({ firebaseUid }, { name: 1 }).lean();
+  return user ? user.name : null;
+}

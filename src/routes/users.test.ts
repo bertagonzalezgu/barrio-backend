@@ -73,3 +73,35 @@ describe('POST /api/users/me', () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe('GET /api/users/me', () => {
+  function getMeAs(token: Record<string, unknown>) {
+    mockVerifyIdToken.mockResolvedValueOnce(token as never);
+    return request(app).get('/api/users/me').set('Authorization', 'Bearer token-valido');
+  }
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+  });
+
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).get('/api/users/me');
+    expect(res.status).toBe(401);
+  });
+
+  it('devuelve solo el nombre del usuario autenticado', async () => {
+    await User.create({ firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' });
+
+    const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ name: 'Mercè' });
+  });
+
+  it('devuelve 404 si el usuario no está registrado en MongoDB', async () => {
+    const res = await getMeAs({ uid: 'uid-fantasma', email: 'f@barrio.local' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Usuario no encontrado' });
+  });
+});
