@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import { prisma } from '../config/prisma';
 
-// Comprobación de humo contra la base de datos real: crea un intercambio completo y lo borra.
 const run = async (): Promise<void> => {
   const ana = await prisma.user.create({
     data: { firebaseUid: 'test-firebase-uid-001', name: 'Ana Test', email: 'ana.test@barrio.local' },
@@ -34,7 +33,6 @@ const run = async (): Promise<void> => {
   });
   console.log(`✅ Exchange + TimeTransaction: ${berta.name} → ${ana.name}  hours=${tx.hours}`);
 
-  // Orden inverso al de creación: las claves foráneas impiden borrar a un padre con hijos.
   await prisma.timeTransaction.delete({ where: { id: tx.id } });
   await prisma.exchange.delete({ where: { id: exchange.id } });
   await prisma.ticket.delete({ where: { id: ticket.id } });

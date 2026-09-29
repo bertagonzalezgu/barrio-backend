@@ -94,7 +94,6 @@ describe('walletService', () => {
       await prisma.timeTransaction.create({ data: { type: 'transfer', toUserId: ana.id, hours: 5 } });
       await createExchange(ana.id, bea.id, 1, 'accepted');
       await createExchange(ana.id, bea.id, 2, 'done');
-      // Ninguno de estos compromete horas: aún no aceptado, ya transferido o anulado.
       await createExchange(ana.id, bea.id, 4, 'proposed');
       await createExchange(ana.id, bea.id, 4, 'confirmed');
       await createExchange(ana.id, bea.id, 4, 'cancelled');

@@ -8,9 +8,6 @@ datasource db {
   provider = "postgresql"
 }
 
-// Los valores de los enums van en minúsculas para que la API siga devolviendo lo mismo
-// que con Mongoose ('offer', 'active'...) y el frontend no tenga que traducirlos.
-
 enum TicketType {
   request
   offer
@@ -41,8 +38,6 @@ enum ExchangeStatus {
   rejected
 }
 
-// Solo `transfer` por ahora: las horas reservadas se derivan de los Exchange en curso,
-// no de filas de reserva/liberación (así hay una única fuente de verdad).
 enum TimeTransactionType {
   transfer
 }
@@ -63,8 +58,6 @@ model User {
   registeredAt DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  // Marca de idempotencia del regalo de bienvenida: se rellena en la misma transacción
-  // que crea su TimeTransaction, y solo si estaba a null.
   welcomeCreditGrantedAt DateTime?
 
   tickets              Ticket[]
@@ -123,7 +116,6 @@ model Exchange {
   rejectedAt  DateTime?
   updatedAt   DateTime  @updatedAt
 
-  // `confirmed` exige que confirmen las dos partes: cada una deja su marca por separado.
   proposerConfirmedAt DateTime?
   receiverConfirmedAt DateTime?
 
@@ -135,8 +127,6 @@ model Exchange {
   @@index([receiverId, status])
 }
 
-// El historial del que se deriva el saldo. onDelete: Restrict explícito en todas las relaciones:
-// borrar un usuario o un intercambio nunca puede reescribir (ni dejar a null) el historial de horas.
 model TimeTransaction {
   id         String              @id @default(uuid())
   type       TimeTransactionType
@@ -154,7 +144,6 @@ model TimeTransaction {
   @@index([exchangeId])
 }
 
-// Se denuncia un ticket o un usuario (uno de los dos; lo valida el servicio, no el esquema).
 model Report {
   id             String       @id @default(uuid())
   reporterId     String
