@@ -7,11 +7,11 @@ export async function getWalletBalance(req: Request, res: Response): Promise<voi
     return;
   }
 
-  const credits = await getBalance(req.user.uid);
-  if (credits === null) {
+  const balance = await getBalance(req.user.uid);
+  if (balance === null) {
     res.status(404).json({ error: 'Usuario no registrado' });
     return;
   }
 
-  res.json({ credits });
+  res.json(balance);
 }

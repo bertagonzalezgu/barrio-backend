@@ -1,6 +1,6 @@
 import request from 'supertest';
-import { User } from '../models/User';
-import { Transaction } from '../models/Transaction';
+import { prisma } from '../config/prisma';
+import { getBalance } from '../services/walletService';
 
 const mockVerifyIdToken = vi.fn();
 
@@ -19,10 +19,6 @@ function registerAs(token: Record<string, unknown>, body: Record<string, unknown
 }
 
 describe('POST /api/users/me', () => {
-  beforeAll(async () => {
-    await Transaction.init();
-  });
-
   beforeEach(() => {
     mockVerifyIdToken.mockReset();
   });
@@ -37,10 +33,9 @@ describe('POST /api/users/me', () => {
     const res = await registerAs({ uid: 'uid-nueva', email: 'nueva@barrio.local' }, { name: 'Nueva' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ firebaseUid: 'uid-nueva', name: 'Nueva', credits: 2 });
-    const user = await User.findOne({ firebaseUid: 'uid-nueva' });
-    expect(user?.credits).toBe(2);
-    expect(await Transaction.countDocuments({ toUserId: user?._id, type: 'welcome' })).toBe(1);
+    expect(res.body).toMatchObject({ firebaseUid: 'uid-nueva', name: 'Nueva' });
+    expect((await getBalance('uid-nueva'))?.balance).toBe(2);
+    expect(await prisma.timeTransaction.count({ where: { toUserId: res.body.id } })).toBe(1);
   });
 
   it('usa el nombre del token (p. ej. Google) si no viene en el body', async () => {
@@ -58,9 +53,26 @@ describe('POST /api/users/me', () => {
     const res = await registerAs(token);
 
     expect(res.status).toBe(200);
-    expect(res.body.credits).toBe(2);
-    expect(await User.countDocuments({ firebaseUid: 'uid-vuelve' })).toBe(1);
-    expect(await Transaction.countDocuments({ type: 'welcome' })).toBe(1);
+    expect((await getBalance('uid-vuelve'))?.balance).toBe(2);
+    expect(await prisma.user.count({ where: { firebaseUid: 'uid-vuelve' } })).toBe(1);
+    expect(await prisma.timeTransaction.count()).toBe(1);
+  });
+
+  it('no falla ni duplica el usuario si llegan dos registros simultáneos', async () => {
+    const token = { uid: 'uid-doble', email: 'doble@barrio.local' };
+
+    const responses = await Promise.all([registerAs(token, { name: 'Doble' }), registerAs(token, { name: 'Doble' })]);
+
+    expect(responses.map((res) => res.status)).toEqual([200, 200]);
+    expect(await prisma.user.count({ where: { firebaseUid: 'uid-doble' } })).toBe(1);
+    expect((await getBalance('uid-doble'))?.balance).toBe(2);
+  });
+
+  it('normaliza el email a minúsculas y recorta espacios del nombre', async () => {
+    const res = await registerAs({ uid: 'uid-mayus', email: 'Mayus@Barrio.Local', name: '  Mía  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ email: 'mayus@barrio.local', name: 'Mía' });
   });
 
   it('devuelve 400 si el token no trae email', async () => {
@@ -90,7 +102,7 @@ describe('GET /api/users/me', () => {
   });
 
   it('devuelve solo el nombre del usuario autenticado', async () => {
-    await User.create({ firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' });
+    await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
 
     const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
 

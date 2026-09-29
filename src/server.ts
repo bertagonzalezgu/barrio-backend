@@ -1,10 +1,13 @@
 import 'dotenv/config';
 import app from './app';
-import connectDB from './config/db';
+import { prisma } from './config/prisma';
 
 const PORT = process.env.PORT ?? 3000;
 
-connectDB()
+// Prisma conecta de forma perezosa en la primera consulta: se fuerza aquí para que un
+// DATABASE_URL incorrecto haga fallar el arranque, no la primera petición de una usuaria.
+prisma
+  .$connect()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`🚀 Servidor escuchando en el puerto ${PORT}`);

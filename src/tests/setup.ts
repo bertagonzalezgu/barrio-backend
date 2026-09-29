@@ -1,22 +1,16 @@
-import { MongoMemoryReplSet } from 'mongodb-memory-server';
-import mongoose from 'mongoose';
+import { prisma } from '../config/prisma';
 
-// Replica set (no standalone): las transacciones multi-documento de MongoDB solo funcionan en replica sets.
-let replSet: MongoMemoryReplSet;
-
-beforeAll(async () => {
-  replSet = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
-  await mongoose.connect(replSet.getUri());
+afterEach(async () => {
+  // Se leen las tablas del esquema en vez de listarlas a mano, así los modelos nuevos se limpian solos.
+  const tables = await prisma.$queryRaw<{ tablename: string }[]>`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'
+  `;
+  // Unsafe porque los nombres de tabla no se pueden pasar como parámetro; vienen de pg_tables, no de la usuaria.
+  const tableList = tables.map(({ tablename }) => `"${tablename}"`).join(', ');
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tableList} CASCADE`);
 });
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await replSet.stop();
-});
-
-afterEach(async () => {
-  const collections = mongoose.connection.collections;
-  for (const key in collections) {
-    await collections[key].deleteMany({});
-  }
+  await prisma.$disconnect();
 });

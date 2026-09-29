@@ -1,0 +1,185 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Los valores de los enums van en minúsculas para que la API siga devolviendo lo mismo
+// que con Mongoose ('offer', 'active'...) y el frontend no tenga que traducirlos.
+
+enum TicketType {
+  request
+  offer
+}
+
+enum TicketCategory {
+  home
+  care
+  digital
+  community
+  learning
+}
+
+enum TicketStatus {
+  active
+  completed
+  reported
+}
+
+enum ExchangeStatus {
+  proposed
+  pending
+  accepted
+  done
+  confirmed
+  rated
+  cancelled
+  rejected
+}
+
+// Solo `transfer` por ahora: las horas reservadas se derivan de los Exchange en curso,
+// no de filas de reserva/liberación (así hay una única fuente de verdad).
+enum TimeTransactionType {
+  transfer
+}
+
+enum ReportStatus {
+  pending
+  reviewed
+}
+
+model User {
+  id           String   @id @default(uuid())
+  firebaseUid  String   @unique
+  name         String   @db.VarChar(80)
+  email        String   @unique
+  avatar       String   @default("")
+  verified     Boolean  @default(false)
+  rating       Float    @default(0)
+  registeredAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Marca de idempotencia del regalo de bienvenida: se rellena en la misma transacción
+  // que crea su TimeTransaction, y solo si estaba a null.
+  welcomeCreditGrantedAt DateTime?
+
+  tickets              Ticket[]
+  proposedExchanges    Exchange[]        @relation("ExchangeProposer")
+  receivedExchanges    Exchange[]        @relation("ExchangeReceiver")
+  sentTransactions     TimeTransaction[] @relation("TransactionFrom")
+  receivedTransactions TimeTransaction[] @relation("TransactionTo")
+  reportsFiled         Report[]          @relation("ReportReporter")
+  reportsReceived      Report[]          @relation("ReportedUser")
+  messages             Message[]
+}
+
+model Ticket {
+  id          String         @id @default(uuid())
+  authorId    String
+  author      User           @relation(fields: [authorId], references: [id])
+  type        TicketType
+  title       String         @db.VarChar(120)
+  description String         @db.VarChar(1000)
+  category    TicketCategory
+  hours       Int
+  icon        String         @default("")
+  lat         Float?
+  lng         Float?
+  date        DateTime?
+  status      TicketStatus   @default(active)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  exchanges Exchange[]
+  reports   Report[]
+
+  @@index([authorId])
+  @@index([status, lat, lng])
+  @@index([category, status])
+}
+
+model Exchange {
+  id         String         @id @default(uuid())
+  ticketId   String
+  ticket     Ticket         @relation(fields: [ticketId], references: [id])
+  proposerId String
+  proposer   User           @relation("ExchangeProposer", fields: [proposerId], references: [id])
+  receiverId String
+  receiver   User           @relation("ExchangeReceiver", fields: [receiverId], references: [id])
+  hours      Int
+  status     ExchangeStatus @default(proposed)
+
+  proposedAt  DateTime  @default(now())
+  pendingAt   DateTime?
+  acceptedAt  DateTime?
+  doneAt      DateTime?
+  confirmedAt DateTime?
+  ratedAt     DateTime?
+  cancelledAt DateTime?
+  rejectedAt  DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  // `confirmed` exige que confirmen las dos partes: cada una deja su marca por separado.
+  proposerConfirmedAt DateTime?
+  receiverConfirmedAt DateTime?
+
+  transactions TimeTransaction[]
+  messages     Message[]
+
+  @@index([ticketId])
+  @@index([proposerId, status])
+  @@index([receiverId, status])
+}
+
+// El historial del que se deriva el saldo. onDelete: Restrict explícito en todas las relaciones:
+// borrar un usuario o un intercambio nunca puede reescribir (ni dejar a null) el historial de horas.
+model TimeTransaction {
+  id         String              @id @default(uuid())
+  type       TimeTransactionType
+  exchangeId String?
+  exchange   Exchange?           @relation(fields: [exchangeId], references: [id], onDelete: Restrict)
+  fromUserId String?
+  fromUser   User?               @relation("TransactionFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUserId   String
+  toUser     User                @relation("TransactionTo", fields: [toUserId], references: [id], onDelete: Restrict)
+  hours      Int
+  date       DateTime            @default(now())
+
+  @@index([toUserId, type])
+  @@index([fromUserId, type])
+  @@index([exchangeId])
+}
+
+// Se denuncia un ticket o un usuario (uno de los dos; lo valida el servicio, no el esquema).
+model Report {
+  id             String       @id @default(uuid())
+  reporterId     String
+  reporter       User         @relation("ReportReporter", fields: [reporterId], references: [id])
+  ticketId       String?
+  ticket         Ticket?      @relation(fields: [ticketId], references: [id])
+  reportedUserId String?
+  reportedUser   User?        @relation("ReportedUser", fields: [reportedUserId], references: [id])
+  reason         String       @db.VarChar(1000)
+  status         ReportStatus @default(pending)
+  createdAt      DateTime     @default(now())
+  reviewedAt     DateTime?
+
+  @@index([ticketId])
+  @@index([reportedUserId, status])
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  exchangeId String
+  exchange   Exchange @relation(fields: [exchangeId], references: [id])
+  senderId   String
+  sender     User     @relation(fields: [senderId], references: [id])
+  text       String   @db.VarChar(2000)
+  sentAt     DateTime @default(now())
+
+  @@index([exchangeId, sentAt])
+}

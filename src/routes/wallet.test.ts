@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { User } from '../models/User';
+import { prisma } from '../config/prisma';
 
 const mockVerifyIdToken = vi.fn();
 
@@ -20,8 +20,14 @@ describe('GET /api/wallet/balance', () => {
   });
 
   it('devuelve el saldo del usuario autenticado', async () => {
-    await User.create({ firebaseUid: 'uid-ana', name: 'Ana', email: 'ana@barrio.local', credits: 5 });
-    await User.create({ firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local', credits: 9 });
+    const ana = await prisma.user.create({ data: { firebaseUid: 'uid-ana', name: 'Ana', email: 'ana@barrio.local' } });
+    const otra = await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    await prisma.timeTransaction.createMany({
+      data: [
+        { type: 'transfer', toUserId: ana.id, hours: 5 },
+        { type: 'transfer', toUserId: otra.id, hours: 9 },
+      ],
+    });
     mockVerifyIdToken.mockResolvedValueOnce({ uid: 'uid-ana' } as never);
 
     const res = await request(app)
@@ -29,7 +35,7 @@ describe('GET /api/wallet/balance', () => {
       .set('Authorization', 'Bearer token-valido');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ credits: 5 });
+    expect(res.body).toEqual({ balance: 5, reserved: 0, available: 5 });
   });
 
   it('devuelve 404 si el usuario de Firebase no está registrado en la base de datos', async () => {
