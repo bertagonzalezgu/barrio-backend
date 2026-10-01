@@ -105,6 +105,34 @@ describe('POST /api/cards', () => {
     expect(res.body).toEqual({ error: 'La descripción es obligatoria' });
     expect(await prisma.card.count()).toBe(0);
   });
+
+  it.each([
+    ['type inválido', { type: 'busco' }, 'El tipo debe ser uno de: request, offer'],
+    ['category inválida', { category: 'Cuidados' }, 'La categoría debe ser una de: home, care, digital, community, learning'],
+    ['title vacío (solo espacios)', { title: '   ' }, 'El título es obligatorio'],
+    ['title de más de 120 caracteres', { title: 'a'.repeat(121) }, 'El título debe ser un texto de 120 caracteres como máximo'],
+    [
+      'description de más de 1000 caracteres',
+      { description: 'a'.repeat(1001) },
+      'La descripción debe ser un texto de 1000 caracteres como máximo',
+    ],
+    ['hours = 0', { hours: 0 }, 'Las horas deben ser un número entero mayor que 0'],
+    ['hours negativo', { hours: -3 }, 'Las horas deben ser un número entero mayor que 0'],
+    ['lat sin lng', { lat: 41.3851 }, 'La ubicación necesita lat y lng a la vez'],
+    [
+      'endDate anterior a startDate',
+      { startDate: '2026-10-15T00:00:00.000Z', endDate: '2026-10-10T00:00:00.000Z' },
+      'La fecha de fin no puede ser anterior a la de inicio',
+    ],
+  ])('devuelve 400 con %s y no guarda la card', async (_case, overrides, error) => {
+    await createAuthor();
+
+    const res = await postCardAs({ ...requiredFields, ...overrides });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error });
+    expect(await prisma.card.count()).toBe(0);
+  });
 });
 
 describe('GET /api/cards', () => {
@@ -156,5 +184,14 @@ describe('GET /api/cards', () => {
 
     expect(res.status).toBe(200);
     expect(titles(res)).toEqual(['Ofrezco ayuda digital', 'Ofrezco cuidados']);
+  });
+
+  it('devuelve 400 si category no es un valor del enum', async () => {
+    await seedCards();
+
+    const res = await getCards({ category: 'foo' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'La categoría debe ser una de: home, care, digital, community, learning' });
   });
 });
