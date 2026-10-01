@@ -1,63 +1,50 @@
 import 'dotenv/config';
-import mongoose from 'mongoose';
-import connectDB from '../config/db';
-import { User } from '../models/User';
-import { Ticket } from '../models/Ticket';
-import { Transaction } from '../models/Transaction';
+import { prisma } from '../config/prisma';
 
 const run = async (): Promise<void> => {
-  await connectDB();
-
-  const testUser = await User.create({
-    firebaseUid: 'test-firebase-uid-001',
-    nombre: 'Ana Test',
-    email: 'ana.test@barrio.local',
-    avatar: '',
-    verificado: false,
-    rating: 0,
-    creditos: 2,
+  const ana = await prisma.user.create({
+    data: { firebaseUid: 'test-firebase-uid-001', name: 'Ana Test', email: 'ana.test@barrio.local' },
   });
-  console.log(`✅ User creado:       _id=${testUser._id}  nombre="${testUser.nombre}"  creditos=${testUser.creditos}h`);
-
-  const testTicket = await Ticket.create({
-    autorId: testUser._id,
-    tipo: 'ofrezco',
-    titulo: 'Ayudo con mudanzas ligeras',
-    descripcion: 'Puedo ayudarte a mover cajas y muebles pequeños por el barrio.',
-    categoria: 'Hogar',
-    horas: 2,
-    icono: 'truck',
-    lat: 41.3851,
-    lng: 2.1734,
-    estado: 'activo',
+  const berta = await prisma.user.create({
+    data: { firebaseUid: 'test-firebase-uid-002', name: 'Berta Test', email: 'berta.test@barrio.local' },
   });
-  console.log(`✅ Ticket creado:     _id=${testTicket._id}  tipo="${testTicket.tipo}"  categoria="${testTicket.categoria}"`);
+  console.log(`✅ Users creados:      ${ana.name} (${ana.id}), ${berta.name} (${berta.id})`);
 
-  const testUserB = await User.create({
-    firebaseUid: 'test-firebase-uid-002',
-    nombre: 'Berta Test',
-    email: 'berta.test@barrio.local',
-    creditos: 5,
+  const ticket = await prisma.ticket.create({
+    data: {
+      authorId: ana.id,
+      type: 'offer',
+      title: 'Ayudo con mudanzas ligeras',
+      description: 'Puedo ayudarte a mover cajas y muebles pequeños por el barrio.',
+      category: 'home',
+      hours: 2,
+      icon: 'truck',
+      lat: 41.3851,
+      lng: 2.1734,
+    },
   });
+  console.log(`✅ Ticket creado:      ${ticket.id}  type="${ticket.type}"  category="${ticket.category}"`);
 
-  const testTx = await Transaction.create({
-    ticketId: testTicket._id,
-    deUserId: testUserB._id, 
-    aUserId: testUser._id,  
-    horas: 2,
+  const exchange = await prisma.exchange.create({
+    data: { ticketId: ticket.id, proposerId: berta.id, receiverId: ana.id, hours: 2, status: 'confirmed' },
   });
-  console.log(`✅ Transaction creada: _id=${testTx._id}  de=${testUserB.nombre} → a=${testUser.nombre}  horas=${testTx.horas}`);
+  const tx = await prisma.timeTransaction.create({
+    data: { type: 'transfer', exchangeId: exchange.id, fromUserId: berta.id, toUserId: ana.id, hours: 2 },
+  });
+  console.log(`✅ Exchange + TimeTransaction: ${berta.name} → ${ana.name}  hours=${tx.hours}`);
 
-  await Transaction.deleteOne({ _id: testTx._id });
-  await Ticket.deleteOne({ _id: testTicket._id });
-  await User.deleteMany({ firebaseUid: { $in: ['test-firebase-uid-001', 'test-firebase-uid-002'] } });
-  console.log('🧹 Documentos de prueba eliminados.');
+  await prisma.timeTransaction.delete({ where: { id: tx.id } });
+  await prisma.exchange.delete({ where: { id: exchange.id } });
+  await prisma.ticket.delete({ where: { id: ticket.id } });
+  await prisma.user.deleteMany({ where: { id: { in: [ana.id, berta.id] } } });
+  console.log('🧹 Filas de prueba eliminadas.');
 
-  await mongoose.disconnect();
   console.log('\n✅ seedTest completado sin errores.\n');
 };
 
-run().catch((err) => {
-  console.error('❌ seedTest falló:', err);
-  process.exit(1);
-});
+run()
+  .catch((err) => {
+    console.error('❌ seedTest falló:', err);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());

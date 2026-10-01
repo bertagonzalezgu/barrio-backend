@@ -1,21 +1,14 @@
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import mongoose from 'mongoose';
+import { prisma } from '../config/prisma';
 
-let mongod: MongoMemoryServer;
-
-beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
-  await mongoose.connect(mongod.getUri());
+afterEach(async () => {
+  const tables = await prisma.$queryRaw<{ tablename: string }[]>`
+    SELECT tablename FROM pg_tables
+    WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'
+  `;
+  const tableList = tables.map(({ tablename }) => `"${tablename}"`).join(', ');
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${tableList} CASCADE`);
 });
 
 afterAll(async () => {
-  await mongoose.disconnect();
-  await mongod.stop();
-});
-
-afterEach(async () => {
-  const collections = mongoose.connection.collections;
-  for (const key in collections) {
-    await collections[key].deleteMany({});
-  }
+  await prisma.$disconnect();
 });
