@@ -110,7 +110,7 @@ describe('GET /api/users/me', () => {
     expect(res.body).toEqual({ name: 'Mercè' });
   });
 
-  it('devuelve 404 si el usuario no está registrado en MongoDB', async () => {
+  it('devuelve 404 si el usuario no está registrado', async () => {
     const res = await getMeAs({ uid: 'uid-fantasma', email: 'f@barrio.local' });
 
     expect(res.status).toBe(404);
