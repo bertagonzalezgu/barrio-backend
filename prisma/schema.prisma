@@ -8,12 +8,12 @@ datasource db {
   provider = "postgresql"
 }
 
-enum TicketType {
+enum CardType {
   request
   offer
 }
 
-enum TicketCategory {
+enum CardCategory {
   home
   care
   digital
@@ -21,7 +21,7 @@ enum TicketCategory {
   learning
 }
 
-enum TicketStatus {
+enum CardStatus {
   active
   completed
   reported
@@ -60,7 +60,7 @@ model User {
 
   welcomeCreditGrantedAt DateTime?
 
-  tickets              Ticket[]
+  cards                Card[]
   proposedExchanges    Exchange[]        @relation("ExchangeProposer")
   receivedExchanges    Exchange[]        @relation("ExchangeReceiver")
   sentTransactions     TimeTransaction[] @relation("TransactionFrom")
@@ -70,22 +70,23 @@ model User {
   messages             Message[]
 }
 
-model Ticket {
-  id          String         @id @default(uuid())
+model Card {
+  id          String       @id @default(uuid())
   authorId    String
-  author      User           @relation(fields: [authorId], references: [id])
-  type        TicketType
-  title       String         @db.VarChar(120)
-  description String         @db.VarChar(1000)
-  category    TicketCategory
+  author      User         @relation(fields: [authorId], references: [id])
+  type        CardType
+  title       String       @db.VarChar(120)
+  description String       @db.VarChar(1000)
+  category    CardCategory
   hours       Int
-  icon        String         @default("")
+  icon        String       @default("")
   lat         Float?
   lng         Float?
-  date        DateTime?
-  status      TicketStatus   @default(active)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  startDate   DateTime?
+  endDate     DateTime?
+  status      CardStatus   @default(active)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
   exchanges Exchange[]
   reports   Report[]
@@ -97,8 +98,8 @@ model Ticket {
 
 model Exchange {
   id         String         @id @default(uuid())
-  ticketId   String
-  ticket     Ticket         @relation(fields: [ticketId], references: [id])
+  cardId     String
+  card       Card           @relation(fields: [cardId], references: [id])
   proposerId String
   proposer   User           @relation("ExchangeProposer", fields: [proposerId], references: [id])
   receiverId String
@@ -122,7 +123,7 @@ model Exchange {
   transactions TimeTransaction[]
   messages     Message[]
 
-  @@index([ticketId])
+  @@index([cardId])
   @@index([proposerId, status])
   @@index([receiverId, status])
 }
@@ -148,8 +149,8 @@ model Report {
   id             String       @id @default(uuid())
   reporterId     String
   reporter       User         @relation("ReportReporter", fields: [reporterId], references: [id])
-  ticketId       String?
-  ticket         Ticket?      @relation(fields: [ticketId], references: [id])
+  cardId         String?
+  card           Card?        @relation(fields: [cardId], references: [id])
   reportedUserId String?
   reportedUser   User?        @relation("ReportedUser", fields: [reportedUserId], references: [id])
   reason         String       @db.VarChar(1000)
@@ -157,7 +158,7 @@ model Report {
   createdAt      DateTime     @default(now())
   reviewedAt     DateTime?
 
-  @@index([ticketId])
+  @@index([cardId])
   @@index([reportedUserId, status])
 }
 

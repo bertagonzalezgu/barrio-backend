@@ -10,7 +10,7 @@ const run = async (): Promise<void> => {
   });
   console.log(`✅ Users creados:      ${ana.name} (${ana.id}), ${berta.name} (${berta.id})`);
 
-  const ticket = await prisma.ticket.create({
+  const card = await prisma.card.create({
     data: {
       authorId: ana.id,
       type: 'offer',
@@ -23,10 +23,10 @@ const run = async (): Promise<void> => {
       lng: 2.1734,
     },
   });
-  console.log(`✅ Ticket creado:      ${ticket.id}  type="${ticket.type}"  category="${ticket.category}"`);
+  console.log(`✅ Card creada:        ${card.id}  type="${card.type}"  category="${card.category}"`);
 
   const exchange = await prisma.exchange.create({
-    data: { ticketId: ticket.id, proposerId: berta.id, receiverId: ana.id, hours: 2, status: 'confirmed' },
+    data: { cardId: card.id, proposerId: berta.id, receiverId: ana.id, hours: 2, status: 'confirmed' },
   });
   const tx = await prisma.timeTransaction.create({
     data: { type: 'transfer', exchangeId: exchange.id, fromUserId: berta.id, toUserId: ana.id, hours: 2 },
@@ -35,7 +35,7 @@ const run = async (): Promise<void> => {
 
   await prisma.timeTransaction.delete({ where: { id: tx.id } });
   await prisma.exchange.delete({ where: { id: exchange.id } });
-  await prisma.ticket.delete({ where: { id: ticket.id } });
+  await prisma.card.delete({ where: { id: card.id } });
   await prisma.user.deleteMany({ where: { id: { in: [ana.id, berta.id] } } });
   console.log('🧹 Filas de prueba eliminadas.');
 

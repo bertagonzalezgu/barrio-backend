@@ -8,10 +8,10 @@ async function createUser(firebaseUid = 'uid-wallet-001') {
 }
 
 async function createExchange(proposerId: string, receiverId: string, hours: number, status: ExchangeStatus) {
-  const ticket = await prisma.ticket.create({
-    data: { authorId: receiverId, type: 'offer', title: 'Ticket', description: 'Desc', category: 'home', hours },
+  const card = await prisma.card.create({
+    data: { authorId: receiverId, type: 'offer', title: 'Card', description: 'Desc', category: 'home', hours },
   });
-  return prisma.exchange.create({ data: { ticketId: ticket.id, proposerId, receiverId, hours, status } });
+  return prisma.exchange.create({ data: { cardId: card.id, proposerId, receiverId, hours, status } });
 }
 
 describe('walletService', () => {
