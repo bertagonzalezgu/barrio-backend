@@ -16,7 +16,7 @@ const run = async (): Promise<void> => {
       type: 'offer',
       title: 'Ayudo con mudanzas ligeras',
       description: 'Puedo ayudarte a mover cajas y muebles pequeños por el barrio.',
-      category: 'home',
+      category: 'home_repairs',
       hours: 2,
       icon: 'truck',
       lat: 41.3851,

@@ -14,11 +14,21 @@ enum CardType {
 }
 
 enum CardCategory {
-  home
-  care
-  digital
-  community
+  home_repairs
+  cleaning
+  moving
+  garden
+  peoplecare
+  petcare
+  health_support
   learning
+  workshops
+  digital
+  cooking
+  transport
+  events
+  sports
+  creative_projects
 }
 
 enum CardStatus {
