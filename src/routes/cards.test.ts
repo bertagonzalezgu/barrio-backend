@@ -15,7 +15,7 @@ const requiredFields = {
   type: 'request',
   title: 'Regar plantas',
   description: 'Necesito que alguien riegue mis plantas 5 días',
-  category: 'care',
+  category: 'garden',
   hours: 2,
 } as const;
 
@@ -108,7 +108,7 @@ describe('POST /api/cards', () => {
 
   it.each([
     ['type inválido', { type: 'busco' }, 'El tipo debe ser uno de: request, offer'],
-    ['category inválida', { category: 'Cuidados' }, 'La categoría debe ser una de: home, care, digital, community, learning'],
+    ['category inválida', { category: 'Cuidados' }, 'La categoría debe ser una de: home_repairs, cleaning, moving, garden, peoplecare, petcare, health_support, learning, workshops, digital, cooking, transport, events, sports, creative_projects'],
     ['title vacío (solo espacios)', { title: '   ' }, 'El título es obligatorio'],
     ['title de más de 120 caracteres', { title: 'a'.repeat(121) }, 'El título debe ser un texto de 120 caracteres como máximo'],
     [
@@ -141,8 +141,8 @@ describe('GET /api/cards', () => {
     const base = { ...requiredFields, authorId: author.id };
     await prisma.card.createMany({
       data: [
-        { ...base, title: 'Busco cuidados', type: 'request', category: 'care' },
-        { ...base, title: 'Ofrezco cuidados', type: 'offer', category: 'care' },
+        { ...base, title: 'Busco cuidados', type: 'request', category: 'peoplecare' },
+        { ...base, title: 'Ofrezco cuidados', type: 'offer', category: 'peoplecare' },
         { ...base, title: 'Ofrezco ayuda digital', type: 'offer', category: 'digital' },
         { ...base, title: 'Completada', status: 'completed' },
         { ...base, title: 'Denunciada', status: 'reported' },
@@ -171,7 +171,7 @@ describe('GET /api/cards', () => {
   it('filtra por category', async () => {
     await seedCards();
 
-    const res = await getCards({ category: 'care' });
+    const res = await getCards({ category: 'peoplecare' });
 
     expect(res.status).toBe(200);
     expect(titles(res)).toEqual(['Busco cuidados', 'Ofrezco cuidados']);
@@ -192,6 +192,6 @@ describe('GET /api/cards', () => {
     const res = await getCards({ category: 'foo' });
 
     expect(res.status).toBe(400);
-    expect(res.body).toEqual({ error: 'La categoría debe ser una de: home, care, digital, community, learning' });
+    expect(res.body).toEqual({ error: 'La categoría debe ser una de: home_repairs, cleaning, moving, garden, peoplecare, petcare, health_support, learning, workshops, digital, cooking, transport, events, sports, creative_projects' });
   });
 });
