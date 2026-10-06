@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { createCard, listActiveCards, parseCardFilters, parseCreateCardInput } from '../services/cardService';
+import { generateCardWithAI, parseGenerateCardInput } from '../services/aiCardService';
 
 export async function postCard(req: Request, res: Response): Promise<void> {
   if (!req.user) {
@@ -30,4 +31,22 @@ export async function getCards(req: Request, res: Response): Promise<void> {
   }
 
   res.json(await listActiveCards(filters.data));
+}
+
+export async function generateCard(req: Request, res: Response): Promise<void> {
+  const parsed = parseGenerateCardInput(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+
+  const result = await generateCardWithAI(parsed.data);
+  if (!result.ok) {
+    const status = result.reason === 'content-rejected' ? 422 : 500;
+    const error = result.reason === 'content-rejected' ? 'content_rejected' : 'generation_failed';
+    res.status(status).json({ error });
+    return;
+  }
+
+  res.json(result.card);
 }

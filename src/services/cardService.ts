@@ -19,22 +19,22 @@ export interface CardFilters {
   category?: CardCategory;
 }
 
-type ParseResult<T> = { ok: true; data: T } | { ok: false; error: string };
+export type ParseResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 type CreateCardResult = { ok: true; card: Card } | { ok: false; reason: 'user-not-found' };
 
-const CARD_TYPES = Object.values(CardType);
-const CARD_CATEGORIES = Object.values(CardCategory);
+export const CARD_TYPES = Object.values(CardType);
+export const CARD_CATEGORIES = Object.values(CardCategory);
 
-function isCardType(value: unknown): value is CardType {
+export function isCardType(value: unknown): value is CardType {
   return CARD_TYPES.includes(value as CardType);
 }
 
-function isCardCategory(value: unknown): value is CardCategory {
+export function isCardCategory(value: unknown): value is CardCategory {
   return CARD_CATEGORIES.includes(value as CardCategory);
 }
 
-function isMissing(value: unknown): boolean {
+export function isMissing(value: unknown): boolean {
   return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
 }
 
