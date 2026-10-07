@@ -1,5 +1,5 @@
-import type Anthropic from '@anthropic-ai/sdk';
-import { getAnthropic } from '../config/anthropic';
+import { ThinkingLevel } from '@google/genai';
+import { getGeminiClient } from '../config/gemini';
 import type { CardCategory, CardType } from '../generated/prisma/client';
 import { CARD_ICONS, GENERATION_SYSTEM_PROMPT, MODERATION_SYSTEM_PROMPT } from '../prompts/generateCard.prompt';
 import {
@@ -11,8 +11,7 @@ import {
   type ParseResult,
 } from './cardService';
 
-const MODERATION_MODEL = 'claude-haiku-4-5';
-const GENERATION_MODEL = 'claude-sonnet-5-5';
+const GEMINI_MODEL = 'gemini-3.8-flash';
 
 export interface GenerateCardInput {
   prompt: string;
@@ -41,11 +40,15 @@ export function parseGenerateCardInput(body: unknown): ParseResult<GenerateCardI
   return { ok: true, data: { prompt: prompt.trim(), type, category } };
 }
 
-function textOf(content: Array<Anthropic.ContentBlock | Anthropic.Beta.BetaContentBlock>): string {
-  for (const block of content) {
-    if (block.type === 'text') return block.text;
-  }
-  throw new Error('La respuesta no contiene texto');
+async function askGemini(systemInstruction: string, prompt: string, maxOutputTokens: number): Promise<string> {
+  const response = await getGeminiClient().models.generateContent({
+    model: GEMINI_MODEL,
+    // Razonamiento bajo: los tokens de "pensar" cuentan contra maxOutputTokens y podrían cortar el JSON.
+    config: { systemInstruction, maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } },
+    contents: prompt,
+  });
+  if (!response.text) throw new Error('Gemini no devolvió texto');
+  return response.text;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -55,31 +58,21 @@ function parseJsonObject(text: string): Record<string, unknown> {
 }
 
 async function moderate(prompt: string): Promise<{ seguro: boolean; motivo: unknown }> {
-  const response = await getAnthropic().messages.create({
-    model: MODERATION_MODEL,
-    max_tokens: 256,
-    system: MODERATION_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: prompt }],
-  });
+  const text = await askGemini(MODERATION_SYSTEM_PROMPT, prompt, 300);
 
-  const { seguro, motivo } = parseJsonObject(textOf(response.content));
+  const { seguro, motivo } = parseJsonObject(text);
   if (typeof seguro !== 'boolean') throw new Error('La moderación no devolvió "seguro" booleano');
   return { seguro, motivo };
 }
 
 async function generate({ prompt, type, category }: GenerateCardInput): Promise<GeneratedCard> {
-  // Si Sonnet rechaza la petición por seguridad, el fallback "default" la reintenta con otro modelo en la misma llamada.
-  const response = await getAnthropic().beta.messages.create({
-    model: GENERATION_MODEL,
-    max_tokens: 2000,
-    output_config: { effort: 'low' },
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
-    system: GENERATION_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: `Tipo: ${type}\nCategoría: ${category}\nTexto: ${prompt}` }],
-  });
+  const text = await askGemini(
+    GENERATION_SYSTEM_PROMPT,
+    `Tipo: ${type}\nCategoría: ${category}\nTexto: ${prompt}`,
+    500,
+  );
 
-  const { titulo, descripcion, icono } = parseJsonObject(textOf(response.content));
+  const { titulo, descripcion, icono } = parseJsonObject(text);
   if (typeof titulo !== 'string' || isMissing(titulo)) throw new Error('Título vacío o inválido');
   if (typeof descripcion !== 'string' || isMissing(descripcion)) throw new Error('Descripción vacía o inválida');
   if (typeof icono !== 'string' || !CARD_ICONS.includes(icono)) throw new Error(`Icono fuera de la lista: ${String(icono)}`);
