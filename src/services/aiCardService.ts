@@ -11,7 +11,7 @@ import {
   type ParseResult,
 } from './cardService';
 
-const GEMINI_MODEL = 'gemini-3.8-flash';
+const GEMINI_MODEL = 'gemini-1.5-flash';
 
 export interface GenerateCardInput {
   prompt: string;
