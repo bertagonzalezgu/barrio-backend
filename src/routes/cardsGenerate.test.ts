@@ -17,13 +17,14 @@ vi.mock('@google/genai', async (importOriginal) => ({
 
 import app from '../app';
 import { GENERATION_SYSTEM_PROMPT, MODERATION_SYSTEM_PROMPT } from '../prompts/generateCard.prompt';
+import { title } from 'node:process';
 
 const validBody = { prompt: 'Puedo regar plantas los fines de semana', type: 'offer', category: 'garden' };
 
 const generatedCard = {
-  titulo: 'Riego tus plantas',
-  descripcion: 'Me encargo de regar tus plantas el fin de semana.',
-  icono: 'garden-plant',
+  title: 'Riego tus plantas',
+  description: 'Me encargo de regar tus plantas el fin de semana.',
+  icon: 'garden-plant',
 };
 
 function geminiReturns(result: object | string) {
@@ -62,7 +63,7 @@ describe('POST /api/cards/generate', () => {
     expect(mockGenerateContent).not.toHaveBeenCalled();
   });
 
-  it('modera, genera y devuelve titulo, descripcion e icono', async () => {
+  it('modera, genera y devuelve title, description y icon', async () => {
     moderationReturns({ seguro: true, motivo: 'ok' });
     generationReturns(generatedCard);
 
@@ -96,7 +97,7 @@ describe('POST /api/cards/generate', () => {
     ['la moderación no devuelve un booleano en seguro', () => moderationReturns({ seguro: 'sí' })],
     ['la generación no devuelve JSON válido', () => {
       moderationReturns({ seguro: true, motivo: 'ok' });
-      generationReturns('{"titulo": ');
+      generationReturns('{"title": ');
     }],
     ['la descripción generada está vacía', () => {
       moderationReturns({ seguro: true, motivo: 'ok' });

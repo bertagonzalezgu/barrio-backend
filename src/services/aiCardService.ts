@@ -1,5 +1,4 @@
-import { ThinkingLevel } from '@google/genai';
-import { getGeminiClient } from '../config/gemini';
+import { getGroqClient } from '../config/groq';
 import type { CardCategory, CardType } from '../generated/prisma/client';
 import { CARD_ICONS, GENERATION_SYSTEM_PROMPT, MODERATION_SYSTEM_PROMPT } from '../prompts/generateCard.prompt';
 import {
@@ -11,7 +10,7 @@ import {
   type ParseResult,
 } from './cardService';
 
-const GEMINI_MODEL = 'gemini-1.5-flash';
+const GROQ_MODEL = 'qwen/qwen3.8-27b';
 
 export interface GenerateCardInput {
   prompt: string;
@@ -20,9 +19,9 @@ export interface GenerateCardInput {
 }
 
 export interface GeneratedCard {
-  titulo: string;
-  descripcion: string;
-  icono: string;
+  title: string;
+  description: string;
+  icon: string;
 }
 
 type GenerateCardResult =
@@ -40,15 +39,18 @@ export function parseGenerateCardInput(body: unknown): ParseResult<GenerateCardI
   return { ok: true, data: { prompt: prompt.trim(), type, category } };
 }
 
-async function askGemini(systemInstruction: string, prompt: string, maxOutputTokens: number): Promise<string> {
-  const response = await getGeminiClient().models.generateContent({
-    model: GEMINI_MODEL,
-    // Razonamiento bajo: los tokens de "pensar" cuentan contra maxOutputTokens y podrían cortar el JSON.
-    config: { systemInstruction, maxOutputTokens, thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } },
-    contents: prompt,
+async function askGroq(systemPrompt: string, userPrompt: string): Promise<string> {
+  const response = await getGroqClient().chat.completions.create({
+    model: GROQ_MODEL,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    response_format: { type: 'json_object' },
   });
-  if (!response.text) throw new Error('Gemini no devolvió texto');
-  return response.text;
+  const text = response.choices[0]?.message?.content;
+  if (!text) throw new Error('Groq no devolvió texto');
+  return text;
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -58,26 +60,24 @@ function parseJsonObject(text: string): Record<string, unknown> {
 }
 
 async function moderate(prompt: string): Promise<{ seguro: boolean; motivo: unknown }> {
-  const text = await askGemini(MODERATION_SYSTEM_PROMPT, prompt, 300);
-
+  const text = await askGroq(MODERATION_SYSTEM_PROMPT, prompt);
   const { seguro, motivo } = parseJsonObject(text);
   if (typeof seguro !== 'boolean') throw new Error('La moderación no devolvió "seguro" booleano');
   return { seguro, motivo };
 }
 
 async function generate({ prompt, type, category }: GenerateCardInput): Promise<GeneratedCard> {
-  const text = await askGemini(
+  const text = await askGroq(
     GENERATION_SYSTEM_PROMPT,
     `Tipo: ${type}\nCategoría: ${category}\nTexto: ${prompt}`,
-    500,
   );
 
-  const { titulo, descripcion, icono } = parseJsonObject(text);
-  if (typeof titulo !== 'string' || isMissing(titulo)) throw new Error('Título vacío o inválido');
-  if (typeof descripcion !== 'string' || isMissing(descripcion)) throw new Error('Descripción vacía o inválida');
-  if (typeof icono !== 'string' || !CARD_ICONS.includes(icono)) throw new Error(`Icono fuera de la lista: ${String(icono)}`);
+  const { title, description, icon } = parseJsonObject(text);
+  if (typeof title !== 'string' || isMissing(title)) throw new Error('Título vacío o inválido');
+  if (typeof description !== 'string' || isMissing(description)) throw new Error('Descripción vacía o inválida');
+  if (typeof icon !== 'string' || !CARD_ICONS.includes(icon)) throw new Error(`Icono fuera de la lista: ${String(icon)}`);
 
-  return { titulo, descripcion, icono };
+  return { title, description, icon };
 }
 
 export async function generateCardWithAI(input: GenerateCardInput): Promise<GenerateCardResult> {
@@ -87,7 +87,6 @@ export async function generateCardWithAI(input: GenerateCardInput): Promise<Gene
       console.warn('Contenido rechazado por moderación:', moderation.motivo);
       return { ok: false, reason: 'content-rejected' };
     }
-
     return { ok: true, card: await generate(input) };
   } catch (error) {
     console.error('Fallo al generar la card con IA:', error);
