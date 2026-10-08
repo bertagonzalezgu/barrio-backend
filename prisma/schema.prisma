@@ -1,0 +1,185 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum CardType {
+  request
+  offer
+}
+
+enum CardCategory {
+  home_repairs
+  cleaning
+  moving
+  garden
+  peoplecare
+  petcare
+  health_support
+  learning
+  workshops
+  digital
+  cooking
+  transport
+  events
+  sports
+  creative_projects
+}
+
+enum CardStatus {
+  active
+  completed
+  reported
+}
+
+enum ExchangeStatus {
+  proposed
+  pending
+  accepted
+  done
+  confirmed
+  rated
+  cancelled
+  rejected
+}
+
+enum TimeTransactionType {
+  transfer
+}
+
+enum ReportStatus {
+  pending
+  reviewed
+}
+
+model User {
+  id           String   @id @default(uuid())
+  firebaseUid  String   @unique
+  name         String   @db.VarChar(80)
+  email        String   @unique
+  avatar       String   @default("")
+  verified     Boolean  @default(false)
+  rating       Float    @default(0)
+  registeredAt DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  welcomeCreditGrantedAt DateTime?
+
+  cards                Card[]
+  proposedExchanges    Exchange[]        @relation("ExchangeProposer")
+  receivedExchanges    Exchange[]        @relation("ExchangeReceiver")
+  sentTransactions     TimeTransaction[] @relation("TransactionFrom")
+  receivedTransactions TimeTransaction[] @relation("TransactionTo")
+  reportsFiled         Report[]          @relation("ReportReporter")
+  reportsReceived      Report[]          @relation("ReportedUser")
+  messages             Message[]
+}
+
+model Card {
+  id          String       @id @default(uuid())
+  authorId    String
+  author      User         @relation(fields: [authorId], references: [id])
+  type        CardType
+  title       String       @db.VarChar(120)
+  description String       @db.VarChar(1000)
+  category    CardCategory
+  hours       Int
+  icon        String       @default("")
+  lat         Float?
+  lng         Float?
+  startDate   DateTime?
+  endDate     DateTime?
+  status      CardStatus   @default(active)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  exchanges Exchange[]
+  reports   Report[]
+
+  @@index([authorId])
+  @@index([status, lat, lng])
+  @@index([category, status])
+}
+
+model Exchange {
+  id         String         @id @default(uuid())
+  cardId     String
+  card       Card           @relation(fields: [cardId], references: [id])
+  proposerId String
+  proposer   User           @relation("ExchangeProposer", fields: [proposerId], references: [id])
+  receiverId String
+  receiver   User           @relation("ExchangeReceiver", fields: [receiverId], references: [id])
+  hours      Int
+  status     ExchangeStatus @default(proposed)
+
+  proposedAt  DateTime  @default(now())
+  pendingAt   DateTime?
+  acceptedAt  DateTime?
+  doneAt      DateTime?
+  confirmedAt DateTime?
+  ratedAt     DateTime?
+  cancelledAt DateTime?
+  rejectedAt  DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  proposerConfirmedAt DateTime?
+  receiverConfirmedAt DateTime?
+
+  transactions TimeTransaction[]
+  messages     Message[]
+
+  @@index([cardId])
+  @@index([proposerId, status])
+  @@index([receiverId, status])
+}
+
+model TimeTransaction {
+  id         String              @id @default(uuid())
+  type       TimeTransactionType
+  exchangeId String?
+  exchange   Exchange?           @relation(fields: [exchangeId], references: [id], onDelete: Restrict)
+  fromUserId String?
+  fromUser   User?               @relation("TransactionFrom", fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUserId   String
+  toUser     User                @relation("TransactionTo", fields: [toUserId], references: [id], onDelete: Restrict)
+  hours      Int
+  date       DateTime            @default(now())
+
+  @@index([toUserId, type])
+  @@index([fromUserId, type])
+  @@index([exchangeId])
+}
+
+model Report {
+  id             String       @id @default(uuid())
+  reporterId     String
+  reporter       User         @relation("ReportReporter", fields: [reporterId], references: [id])
+  cardId         String?
+  card           Card?        @relation(fields: [cardId], references: [id])
+  reportedUserId String?
+  reportedUser   User?        @relation("ReportedUser", fields: [reportedUserId], references: [id])
+  reason         String       @db.VarChar(1000)
+  status         ReportStatus @default(pending)
+  createdAt      DateTime     @default(now())
+  reviewedAt     DateTime?
+
+  @@index([cardId])
+  @@index([reportedUserId, status])
+}
+
+model Message {
+  id         String   @id @default(uuid())
+  exchangeId String
+  exchange   Exchange @relation(fields: [exchangeId], references: [id])
+  senderId   String
+  sender     User     @relation(fields: [senderId], references: [id])
+  text       String   @db.VarChar(2000)
+  sentAt     DateTime @default(now())
+
+  @@index([exchangeId, sentAt])
+}

@@ -1,4 +1,5 @@
-import { User, type IUser } from '../models/User';
+import { prisma } from '../config/prisma';
+import { Prisma, type User } from '../generated/prisma/client';
 import { grantWelcomeCredit } from './walletService';
 
 interface RegisterUserInput {
@@ -8,33 +9,35 @@ interface RegisterUserInput {
 }
 
 type RegisterUserResult =
-  | { ok: true; user: IUser }
+  | { ok: true; user: User }
   | { ok: false; reason: 'missing-name' };
 
-/**
- * Crea el usuario si no existe y le concede el regalo de bienvenida. Idempotente:
- * se puede llamar tras el registro y en cada login sin duplicar usuario ni horas.
- * `name` solo es necesario la primera vez, cuando se crea el usuario.
- */
 export async function registerUser({ firebaseUid, email, name }: RegisterUserInput): Promise<RegisterUserResult> {
-  let user = await User.findOne({ firebaseUid });
+  let user = await prisma.user.findUnique({ where: { firebaseUid } });
 
   if (!user) {
-    if (!name) return { ok: false, reason: 'missing-name' };
-    // Upsert con $setOnInsert en vez de create: si dos peticiones llegan a la vez, no falla ninguna.
-    user = await User.findOneAndUpdate(
-      { firebaseUid },
-      { $setOnInsert: { firebaseUid, email, name } },
-      { upsert: true, returnDocument: 'after', runValidators: true }
-    );
-    if (!user) throw new Error(`No se pudo crear el usuario ${firebaseUid}`);
+    const trimmedName = name?.trim();
+    if (!trimmedName) return { ok: false, reason: 'missing-name' };
+    user = await createOrGetConcurrent(firebaseUid, email.trim().toLowerCase(), trimmedName);
   }
 
-  // Se llama también con usuarios ya existentes: repara el caso de un usuario creado sin regalo.
-  const granted = await grantWelcomeCredit(user._id);
-  if (granted) {
-    user = (await User.findById(user._id)) ?? user;
-  }
+  await grantWelcomeCredit(user.id);
 
   return { ok: true, user };
+}
+
+async function createOrGetConcurrent(firebaseUid: string, email: string, name: string): Promise<User> {
+  try {
+    return await prisma.user.create({ data: { firebaseUid, email, name } });
+  } catch (error) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+    const existing = await prisma.user.findUnique({ where: { firebaseUid } });
+    if (!existing) throw error;
+    return existing;
+  }
+}
+
+export async function getUserName(firebaseUid: string): Promise<string | null> {
+  const user = await prisma.user.findUnique({ where: { firebaseUid }, select: { name: true } });
+  return user ? user.name : null;
 }
