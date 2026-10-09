@@ -1,5 +1,12 @@
 import type { Request, Response } from 'express';
-import { createCard, listActiveCards, parseCardFilters, parseCreateCardInput } from '../services/cardService';
+import {
+  createCard,
+  deleteCard,
+  findCardById,
+  listActiveCards,
+  parseCardFilters,
+  parseCreateCardInput,
+} from '../services/cardService';
 import { generateCardWithAI, parseGenerateCardInput } from '../services/aiCardService';
 
 export async function postCard(req: Request, res: Response): Promise<void> {
@@ -49,4 +56,34 @@ export async function generateCard(req: Request, res: Response): Promise<void> {
   }
 
   res.json(result.card);
+}
+
+export async function getCardById(req: Request<{ id: string }>, res: Response): Promise<void> {
+  const card = await findCardById(req.params.id);
+  if (!card) {
+    res.status(404).json({ error: 'Card not found' });
+    return;
+  }
+
+  res.json(card);
+}
+
+const DELETE_ERRORS = {
+  'not-found': { status: 404, error: 'Card not found' },
+  forbidden: { status: 403, error: 'Only the author can delete this card' },} as const;
+
+export async function removeCard(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await deleteCard(req.params.id, req.user.uid);
+  if (!result.ok) {
+    const { status, error } = DELETE_ERRORS[result.reason];
+    res.status(status).json({ error });
+    return;
+  }
+
+  res.status(204).end();
 }
