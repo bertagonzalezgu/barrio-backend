@@ -140,7 +140,7 @@ export async function listActiveCards(filters: CardFilters): Promise<Card[]> {
 export async function findCardById(id: string) {
   return prisma.card.findUnique({
     where: { id, status: { not: 'deleted' } },
-    include: { author: { select: { id: true, name: true } } },
+    include: { author: { select: { id: true, name: true, firebaseUid: true } } },
   });
 }
 
