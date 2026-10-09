@@ -136,3 +136,26 @@ export async function listActiveCards(filters: CardFilters): Promise<Card[]> {
     orderBy: { createdAt: 'desc' },
   });
 }
+
+export async function findCardById(id: string) {
+  return prisma.card.findUnique({
+    where: { id, status: { not: 'deleted' } },
+    include: { author: { select: { id: true, name: true } } },
+  });
+}
+
+type DeleteCardResult = { ok: true } | { ok: false; reason: 'not-found' | 'forbidden' };
+
+// Borrado lógico: los Exchange y Report que apuntan a la card siguen intactos, y con ellos el historial de horas.
+export async function deleteCard(id: string, firebaseUid: string): Promise<DeleteCardResult> {
+  const card = await prisma.card.findUnique({
+    where: { id, status: { not: 'deleted' } },
+    select: { author: { select: { firebaseUid: true } } },
+  });
+  if (!card) return { ok: false, reason: 'not-found' };
+  // authorId es el id interno del User, no el uid de Firebase: hay que comparar con author.firebaseUid.
+  if (card.author.firebaseUid !== firebaseUid) return { ok: false, reason: 'forbidden' };
+
+  await prisma.card.update({ where: { id }, data: { status: 'deleted' } });
+  return { ok: true };
+}

@@ -195,3 +195,119 @@ describe('GET /api/cards', () => {
     expect(res.body).toEqual({ error: 'La categoría debe ser una de: home_repairs, cleaning, moving, garden, peoplecare, petcare, health_support, learning, workshops, digital, cooking, transport, events, sports, creative_projects' });
   });
 });
+
+describe('GET /api/cards/:id', () => {
+  function getCard(id: string) {
+    mockVerifyIdToken.mockResolvedValueOnce({ uid: AUTHOR_UID } as never);
+    return request(app).get(`/api/cards/${id}`).set('Authorization', 'Bearer token-valido');
+  }
+
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).get('/api/cards/cualquiera');
+    expect(res.status).toBe(401);
+  });
+
+  it('devuelve la card con su autor', async () => {
+    const author = await createAuthor();
+    const card = await prisma.card.create({ data: { ...requiredFields, authorId: author.id } });
+
+    const res = await getCard(card.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ...requiredFields, id: card.id, authorId: author.id });
+    expect(res.body.author).toEqual({ id: author.id, name: 'Autora' });
+  });
+
+  it('devuelve 404 si la card no existe', async () => {
+    const res = await getCard('no-existe');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Card not found' });
+  });
+
+  it('devuelve 404 si la card está eliminada', async () => {
+    const author = await createAuthor();
+    const card = await prisma.card.create({ data: { ...requiredFields, authorId: author.id, status: 'deleted' } });
+
+    const res = await getCard(card.id);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Card not found' });
+  });
+});
+
+describe('DELETE /api/cards/:id', () => {
+  function deleteCardAs(uid: string, id: string) {
+    mockVerifyIdToken.mockResolvedValueOnce({ uid } as never);
+    return request(app).delete(`/api/cards/${id}`).set('Authorization', 'Bearer token-valido');
+  }
+
+  async function seedCard() {
+    const author = await createAuthor();
+    return prisma.card.create({ data: { ...requiredFields, authorId: author.id } });
+  }
+
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).delete('/api/cards/cualquiera');
+    expect(res.status).toBe(401);
+  });
+
+  it('la autora elimina su card y recibe 204 sin body', async () => {
+    const card = await seedCard();
+
+    const res = await deleteCardAs(AUTHOR_UID, card.id);
+
+    expect(res.status).toBe(204);
+    expect(res.body).toEqual({});
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject({ status: 'deleted' });
+  });
+
+  it('devuelve 403 si quien borra no es la autora y no borra la card', async () => {
+    const card = await seedCard();
+    await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+
+    const res = await deleteCardAs('uid-otra', card.id);
+
+    expect(res.status).toBe(403);
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject({ status: 'active' });
+  });
+
+  it('devuelve 404 si la card no existe', async () => {
+    const res = await deleteCardAs(AUTHOR_UID, 'no-existe');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Card not found' });
+  });
+
+  it('devuelve 404 si la card ya estaba eliminada', async () => {
+    const card = await seedCard();
+    await prisma.card.update({ where: { id: card.id }, data: { status: 'deleted' } });
+
+    const res = await deleteCardAs(AUTHOR_UID, card.id);
+
+    expect(res.status).toBe(404);
+  });
+
+  it('conserva los intercambios de la card eliminada', async () => {
+    const card = await seedCard();
+    const other = await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    await prisma.exchange.create({
+      data: { cardId: card.id, proposerId: other.id, receiverId: card.authorId, hours: card.hours },
+    });
+
+    const res = await deleteCardAs(AUTHOR_UID, card.id);
+
+    expect(res.status).toBe(204);
+    expect(await prisma.exchange.count({ where: { cardId: card.id } })).toBe(1);
+  });
+
+  it('la card eliminada no aparece en el feed', async () => {
+    const card = await seedCard();
+    await deleteCardAs(AUTHOR_UID, card.id);
+
+    const res = await getCards();
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
