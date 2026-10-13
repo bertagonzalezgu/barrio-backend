@@ -93,8 +93,8 @@ model Card {
   icon        String       @default("")
   lat         Float?
   lng         Float?
-  startDate   DateTime?
-  endDate     DateTime?
+  startDate   DateTime?    @db.Date
+  endDate     DateTime?    @db.Date
   status      CardStatus   @default(active)
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt

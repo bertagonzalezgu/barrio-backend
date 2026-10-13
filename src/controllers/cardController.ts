@@ -6,6 +6,8 @@ import {
   listActiveCards,
   parseCardFilters,
   parseCreateCardInput,
+  parseUpdateCardInput,
+  updateCard,
 } from '../services/cardService';
 import { generateCardWithAI, parseGenerateCardInput } from '../services/aiCardService';
 
@@ -86,4 +88,35 @@ export async function removeCard(req: Request<{ id: string }>, res: Response): P
   }
 
   res.status(204).end();
+}
+
+const UPDATE_ERRORS = {
+  'not-found': { status: 404, error: 'Card not found' },
+  forbidden: { status: 403, error: 'Only the author can edit this card' },
+} as const;
+
+export async function patchCard(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const parsed = parseUpdateCardInput(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+
+  const result = await updateCard(req.params.id, req.user.uid, parsed.data);
+  if (!result.ok) {
+    if (result.reason === 'invalid') {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    const { status, error } = UPDATE_ERRORS[result.reason];
+    res.status(status).json({ error });
+    return;
+  }
+
+  res.json(result.card);
 }

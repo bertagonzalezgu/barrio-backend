@@ -44,23 +44,40 @@ describe('POST /api/cards', () => {
   });
 
   // buscar.feature — "Publicar con fecha de inicio y duración de varios días"
-  it('crea la card con todos los campos', async () => {
+  it('crea la card con todos los campos y calcula la fecha de fin', async () => {
     const author = await createAuthor();
-    const body = {
-      ...requiredFields,
-      icon: 'plant',
-      lat: 41.3851,
-      lng: 2.1734,
-      startDate: '2026-10-10T00:00:00.000Z',
-      endDate: '2026-10-15T00:00:00.000Z',
-    };
+    const body = { ...requiredFields, icon: 'plant', lat: 41.3851, lng: 2.1734 };
 
-    const res = await postCardAs(body);
+    const res = await postCardAs({ ...body, startDate: '2026-10-10', durationDays: 5 });
 
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ ...body, authorId: author.id, status: 'active' });
+    expect(res.body).toMatchObject({
+      ...body,
+      authorId: author.id,
+      status: 'active',
+      startDate: '2026-10-10T00:00:00.000Z',
+      endDate: '2026-10-14T00:00:00.000Z',
+    });
     expect(res.body.id).toEqual(expect.any(String));
     expect(await prisma.card.count()).toBe(1);
+  });
+
+  it('una duración de 1 día termina el mismo día que empieza', async () => {
+    await createAuthor();
+
+    const res = await postCardAs({ ...requiredFields, startDate: '2026-10-10', durationDays: 1 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.endDate).toBe('2026-10-10T00:00:00.000Z');
+  });
+
+  it('calcula la fecha de fin cruzando meses', async () => {
+    await createAuthor();
+
+    const res = await postCardAs({ ...requiredFields, startDate: '2026-10-30', durationDays: 5 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.endDate).toBe('2026-11-03T00:00:00.000Z');
   });
 
   // buscar.feature — "Publicar una tarjeta de 'busco' con éxito"
@@ -120,9 +137,35 @@ describe('POST /api/cards', () => {
     ['hours negativo', { hours: -3 }, 'Las horas deben ser un número entero mayor que 0'],
     ['lat sin lng', { lat: 41.3851 }, 'La ubicación necesita lat y lng a la vez'],
     [
-      'endDate anterior a startDate',
-      { startDate: '2026-10-15T00:00:00.000Z', endDate: '2026-10-10T00:00:00.000Z' },
-      'La fecha de fin no puede ser anterior a la de inicio',
+      'startDate con hora',
+      { startDate: '2026-10-09T22:00:00.000Z', durationDays: 5 },
+      'La fecha de inicio debe tener formato YYYY-MM-DD',
+    ],
+    [
+      'startDate inexistente',
+      { startDate: '2026-02-30', durationDays: 5 },
+      'La fecha de inicio debe tener formato YYYY-MM-DD',
+    ],
+    [
+      'durationDays = 0',
+      { startDate: '2026-10-10', durationDays: 0 },
+      'La duración debe ser un número entero de días mayor que 0',
+    ],
+    [
+      'durationDays decimal',
+      { startDate: '2026-10-10', durationDays: 2.5 },
+      'La duración debe ser un número entero de días mayor que 0',
+    ],
+    [
+      'startDate sin durationDays',
+      { startDate: '2026-10-10' },
+      'Indica la duración en días junto con la fecha de inicio',
+    ],
+    ['durationDays sin startDate', { durationDays: 5 }, 'La duración necesita una fecha de inicio'],
+    [
+      'endDate enviada por el cliente',
+      { startDate: '2026-10-10', durationDays: 5, endDate: '2026-10-14' },
+      'La fecha de fin se calcula en el servidor: envía durationDays',
     ],
   ])('devuelve 400 con %s y no guarda la card', async (_case, overrides, error) => {
     await createAuthor();
@@ -166,6 +209,22 @@ describe('GET /api/cards', () => {
 
     expect(res.status).toBe(200);
     expect(titles(res)).toEqual(['Busco cuidados', 'Ofrezco ayuda digital', 'Ofrezco cuidados']);
+  });
+
+  it('incluye el autor en cada card', async () => {
+    await seedCards();
+
+    const res = await getCards();
+
+    expect(res.status).toBe(200);
+    for (const card of res.body) {
+      expect(card.author).toEqual({
+        id: card.authorId,
+        name: 'Autora',
+        email: 'autora@barrio.local',
+        firebaseUid: AUTHOR_UID,
+      });
+    }
   });
 
   it('filtra por category', async () => {
@@ -215,7 +274,12 @@ describe('GET /api/cards/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ...requiredFields, id: card.id, authorId: author.id });
-    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', firebaseUid: AUTHOR_UID });
+    expect(res.body.author).toEqual({
+      id: author.id,
+      name: 'Autora',
+      email: 'autora@barrio.local',
+      firebaseUid: AUTHOR_UID,
+    });
   });
 
   it('devuelve 404 si la card no existe', async () => {
@@ -309,5 +373,153 @@ describe('DELETE /api/cards/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+});
+
+describe('PATCH /api/cards/:id', () => {
+  function patchCardAs(uid: string, id: string, body: Record<string, unknown>) {
+    mockVerifyIdToken.mockResolvedValueOnce({ uid } as never);
+    return request(app).patch(`/api/cards/${id}`).set('Authorization', 'Bearer token-valido').send(body);
+  }
+
+  async function seedCard(dates: { startDate?: Date; endDate?: Date } = {}) {
+    const author = await createAuthor();
+    return prisma.card.create({ data: { ...requiredFields, ...dates, authorId: author.id } });
+  }
+
+  // 5 días: del 10 al 14 de octubre, ambos incluidos.
+  const fiveDays = { startDate: new Date('2026-10-10'), endDate: new Date('2026-10-14') };
+
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).patch('/api/cards/cualquiera').send({ title: 'Nuevo' });
+    expect(res.status).toBe(401);
+  });
+
+  it('la autora edita los campos y recibe la card con su autor', async () => {
+    const card = await seedCard();
+    const changes = {
+      title: 'Regar y abonar plantas',
+      description: 'Ahora también hay que abonarlas',
+      category: 'peoplecare',
+      hours: 3,
+      icon: 'leaf',
+      lat: 41.4,
+      lng: 2.17,
+    };
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, changes);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ...changes, id: card.id, type: 'request' });
+    expect(res.body.author).toMatchObject({ firebaseUid: AUTHOR_UID });
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject(changes);
+  });
+
+  it('solo cambia los campos enviados', async () => {
+    const card = await seedCard();
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { hours: 4 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ...requiredFields, hours: 4 });
+  });
+
+  it('no permite cambiar el tipo', async () => {
+    const card = await seedCard();
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { type: 'offer' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.type).toBe('request');
+  });
+
+  it('devuelve 403 si quien edita no es la autora y no cambia la card', async () => {
+    const card = await seedCard();
+    await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+
+    const res = await patchCardAs('uid-otra', card.id, { title: 'Hackeada' });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'Only the author can edit this card' });
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject({ title: requiredFields.title });
+  });
+
+  it('devuelve 404 si la card no existe', async () => {
+    const res = await patchCardAs(AUTHOR_UID, 'no-existe', { title: 'Nuevo' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Card not found' });
+  });
+
+  it('devuelve 404 si la card está eliminada', async () => {
+    const author = await createAuthor();
+    const card = await prisma.card.create({ data: { ...requiredFields, authorId: author.id, status: 'deleted' } });
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { title: 'Nuevo' });
+
+    expect(res.status).toBe(404);
+  });
+
+  it.each([
+    ['title vacío', { title: '  ' }, 'El título es obligatorio'],
+    ['title de más de 120 caracteres', { title: 'a'.repeat(121) }, 'El título debe ser un texto de 120 caracteres como máximo'],
+    ['description null', { description: null }, 'La descripción es obligatoria'],
+    ['hours = 0', { hours: 0 }, 'Las horas deben ser un número entero mayor que 0'],
+    ['lat sin lng', { lat: 41.4 }, 'La ubicación necesita lat y lng a la vez'],
+    ['startDate con hora', { startDate: '2026-10-09T22:00:00.000Z' }, 'La fecha de inicio debe tener formato YYYY-MM-DD'],
+    ['endDate', { endDate: '2026-10-20' }, 'La fecha de fin se calcula en el servidor: envía durationDays'],
+  ])('devuelve 400 con %s y no cambia la card', async (_case, body, error) => {
+    const card = await seedCard(fiveDays);
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error });
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject({ ...requiredFields, ...fiveDays });
+  });
+
+  it('con solo startDate mueve la card manteniendo su duración', async () => {
+    const card = await seedCard(fiveDays);
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { startDate: '2026-10-20' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ startDate: '2026-10-20T00:00:00.000Z', endDate: '2026-10-24T00:00:00.000Z' });
+  });
+
+  it('con startDate y durationDays recalcula la fecha de fin', async () => {
+    const card = await seedCard(fiveDays);
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { startDate: '2026-10-20', durationDays: 2 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ startDate: '2026-10-20T00:00:00.000Z', endDate: '2026-10-21T00:00:00.000Z' });
+  });
+
+  it('con solo durationDays mantiene el inicio y recalcula el fin', async () => {
+    const card = await seedCard(fiveDays);
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { durationDays: 3 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ startDate: '2026-10-10T00:00:00.000Z', endDate: '2026-10-12T00:00:00.000Z' });
+  });
+
+  it('devuelve 400 con solo durationDays si la card no tiene fecha de inicio', async () => {
+    const card = await seedCard();
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { durationDays: 3 });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'La duración necesita una fecha de inicio' });
+  });
+
+  it('devuelve 400 con solo startDate si la card no tiene fechas', async () => {
+    const card = await seedCard();
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { startDate: '2026-10-20' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Indica la duración en días junto con la fecha de inicio' });
   });
 });
