@@ -23,6 +23,9 @@ export type ParseResult<T> = { ok: true; data: T } | { ok: false; error: string 
 
 type CreateCardResult = { ok: true; card: Card } | { ok: false; reason: 'user-not-found' };
 
+// La autora que ve el frontend: firebaseUid para saber si es la dueña, id/name/email para pintar el perfil.
+const AUTHOR_SELECT = { id: true, name: true, email: true, firebaseUid: true } as const;
+
 export const CARD_TYPES = Object.values(CardType);
 export const CARD_CATEGORIES = Object.values(CardCategory);
 
@@ -130,17 +133,18 @@ export async function createCard(firebaseUid: string, input: CreateCardInput): P
   return { ok: true, card };
 }
 
-export async function listActiveCards(filters: CardFilters): Promise<Card[]> {
+export async function listActiveCards(filters: CardFilters) {
   return prisma.card.findMany({
     where: { status: 'active', ...filters },
     orderBy: { createdAt: 'desc' },
+    include: { author: { select: AUTHOR_SELECT } },
   });
 }
 
 export async function findCardById(id: string) {
   return prisma.card.findUnique({
     where: { id, status: { not: 'deleted' } },
-    include: { author: { select: { id: true, name: true, firebaseUid: true } } },
+    include: { author: { select: AUTHOR_SELECT } },
   });
 }
 

@@ -168,6 +168,22 @@ describe('GET /api/cards', () => {
     expect(titles(res)).toEqual(['Busco cuidados', 'Ofrezco ayuda digital', 'Ofrezco cuidados']);
   });
 
+  it('incluye el autor en cada card', async () => {
+    await seedCards();
+
+    const res = await getCards();
+
+    expect(res.status).toBe(200);
+    for (const card of res.body) {
+      expect(card.author).toEqual({
+        id: card.authorId,
+        name: 'Autora',
+        email: 'autora@barrio.local',
+        firebaseUid: AUTHOR_UID,
+      });
+    }
+  });
+
   it('filtra por category', async () => {
     await seedCards();
 
@@ -215,7 +231,12 @@ describe('GET /api/cards/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ...requiredFields, id: card.id, authorId: author.id });
-    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', firebaseUid: AUTHOR_UID });
+    expect(res.body.author).toEqual({
+      id: author.id,
+      name: 'Autora',
+      email: 'autora@barrio.local',
+      firebaseUid: AUTHOR_UID,
+    });
   });
 
   it('devuelve 404 si la card no existe', async () => {
