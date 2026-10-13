@@ -111,33 +111,53 @@ function resolveSchedule(
   return { ok: true, data: { startDate: start, endDate: computeEndDate(start, days) } };
 }
 
-export function parseCreateCardInput(body: unknown): ParseResult<CreateCardInput> {
-  const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
-  const { type, title, description, category, hours, icon } = input;
+function toRecord(body: unknown): Record<string, unknown> {
+  return (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
+}
 
-  if (isMissing(category)) return { ok: false, error: 'La categoría es obligatoria' };
-  if (!isCardCategory(category)) return { ok: false, error: `La categoría debe ser una de: ${CARD_CATEGORIES.join(', ')}` };
+// Validadores por campo, compartidos por create (campos obligatorios) y update (solo los que llegan).
+function parseCategory(value: unknown): ParseResult<CardCategory> {
+  if (isMissing(value)) return { ok: false, error: 'La categoría es obligatoria' };
+  if (!isCardCategory(value)) return { ok: false, error: `La categoría debe ser una de: ${CARD_CATEGORIES.join(', ')}` };
+  return { ok: true, data: value };
+}
 
-  if (isMissing(description)) return { ok: false, error: 'La descripción es obligatoria' };
-  if (typeof description !== 'string' || description.trim().length > 1000) {
+function parseDescription(value: unknown): ParseResult<string> {
+  if (isMissing(value)) return { ok: false, error: 'La descripción es obligatoria' };
+  if (typeof value !== 'string' || value.trim().length > 1000) {
     return { ok: false, error: 'La descripción debe ser un texto de 1000 caracteres como máximo' };
   }
+  return { ok: true, data: value.trim() };
+}
 
-  if (isMissing(type)) return { ok: false, error: 'El tipo es obligatorio' };
-  if (!isCardType(type)) return { ok: false, error: `El tipo debe ser uno de: ${CARD_TYPES.join(', ')}` };
+function parseType(value: unknown): ParseResult<CardType> {
+  if (isMissing(value)) return { ok: false, error: 'El tipo es obligatorio' };
+  if (!isCardType(value)) return { ok: false, error: `El tipo debe ser uno de: ${CARD_TYPES.join(', ')}` };
+  return { ok: true, data: value };
+}
 
-  if (isMissing(title)) return { ok: false, error: 'El título es obligatorio' };
-  if (typeof title !== 'string' || title.trim().length > 120) {
+function parseTitle(value: unknown): ParseResult<string> {
+  if (isMissing(value)) return { ok: false, error: 'El título es obligatorio' };
+  if (typeof value !== 'string' || value.trim().length > 120) {
     return { ok: false, error: 'El título debe ser un texto de 120 caracteres como máximo' };
   }
+  return { ok: true, data: value.trim() };
+}
 
-  if (isMissing(hours)) return { ok: false, error: 'Las horas son obligatorias' };
-  if (typeof hours !== 'number' || !Number.isInteger(hours) || hours < 1) {
+function parseHours(value: unknown): ParseResult<number> {
+  if (isMissing(value)) return { ok: false, error: 'Las horas son obligatorias' };
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
     return { ok: false, error: 'Las horas deben ser un número entero mayor que 0' };
   }
+  return { ok: true, data: value };
+}
 
-  if (icon !== undefined && typeof icon !== 'string') return { ok: false, error: 'El icono debe ser un texto' };
+function parseIcon(value: unknown): ParseResult<string | undefined> {
+  if (value !== undefined && typeof value !== 'string') return { ok: false, error: 'El icono debe ser un texto' };
+  return { ok: true, data: value };
+}
 
+function parseLocation(input: Record<string, unknown>): ParseResult<{ lat?: number; lng?: number }> {
   const lat = parseOptionalNumber(input.lat, -90, 90);
   const lng = parseOptionalNumber(input.lng, -180, 180);
   if (lat === null || lng === null) return { ok: false, error: 'La ubicación (lat, lng) no es válida' };
@@ -145,26 +165,91 @@ export function parseCreateCardInput(body: unknown): ParseResult<CreateCardInput
   if ((lat === undefined) !== (lng === undefined)) {
     return { ok: false, error: 'La ubicación necesita lat y lng a la vez' };
   }
+  return { ok: true, data: { lat, lng } };
+}
+
+// En update un campo ausente significa "no lo toques"; si llega, se valida igual que en create.
+function parseIfPresent<T>(value: unknown, parse: (value: unknown) => ParseResult<T>): ParseResult<T | undefined> {
+  return value === undefined ? { ok: true, data: undefined } : parse(value);
+}
+
+export function parseCreateCardInput(body: unknown): ParseResult<CreateCardInput> {
+  const input = toRecord(body);
+
+  const category = parseCategory(input.category);
+  if (!category.ok) return category;
+  const description = parseDescription(input.description);
+  if (!description.ok) return description;
+  const type = parseType(input.type);
+  if (!type.ok) return type;
+  const title = parseTitle(input.title);
+  if (!title.ok) return title;
+  const hours = parseHours(input.hours);
+  if (!hours.ok) return hours;
+  const icon = parseIcon(input.icon);
+  if (!icon.ok) return icon;
+  const location = parseLocation(input);
+  if (!location.ok) return location;
 
   const scheduleChange = parseScheduleChange(input);
   if (!scheduleChange.ok) return scheduleChange;
   const schedule = resolveSchedule({ startDate: null, endDate: null }, scheduleChange.data);
   if (!schedule.ok) return schedule;
-  const { startDate, endDate } = schedule.data;
 
   return {
     ok: true,
     data: {
-      type,
-      title: title.trim(),
-      description: description.trim(),
-      category,
-      hours,
-      icon,
-      lat,
-      lng,
-      startDate,
-      endDate,
+      type: type.data,
+      title: title.data,
+      description: description.data,
+      category: category.data,
+      hours: hours.data,
+      icon: icon.data,
+      ...location.data,
+      ...schedule.data,
+    },
+  };
+}
+
+export interface UpdateCardInput extends ScheduleChange {
+  title?: string;
+  description?: string;
+  category?: CardCategory;
+  hours?: number;
+  icon?: string;
+  lat?: number;
+  lng?: number;
+}
+
+// El tipo no es editable: se ignora igual que cualquier otro campo desconocido.
+export function parseUpdateCardInput(body: unknown): ParseResult<UpdateCardInput> {
+  const input = toRecord(body);
+
+  const category = parseIfPresent(input.category, parseCategory);
+  if (!category.ok) return category;
+  const description = parseIfPresent(input.description, parseDescription);
+  if (!description.ok) return description;
+  const title = parseIfPresent(input.title, parseTitle);
+  if (!title.ok) return title;
+  const hours = parseIfPresent(input.hours, parseHours);
+  if (!hours.ok) return hours;
+  const icon = parseIcon(input.icon);
+  if (!icon.ok) return icon;
+  const location = parseLocation(input);
+  if (!location.ok) return location;
+  const schedule = parseScheduleChange(input);
+  if (!schedule.ok) return schedule;
+
+  return {
+    ok: true,
+    data: {
+      title: title.data,
+      description: description.data,
+      category: category.data,
+      hours: hours.data,
+      icon: icon.data,
+      ...location.data,
+      ...schedule.data,
     },
   };
 }
@@ -219,4 +304,30 @@ export async function deleteCard(id: string, firebaseUid: string): Promise<Delet
 
   await prisma.card.update({ where: { id }, data: { status: 'deleted' } });
   return { ok: true };
+}
+
+type UpdateCardResult =
+  | { ok: true; card: NonNullable<Awaited<ReturnType<typeof findCardById>>> }
+  | { ok: false; reason: 'not-found' | 'forbidden' }
+  | { ok: false; reason: 'invalid'; error: string };
+
+export async function updateCard(id: string, firebaseUid: string, input: UpdateCardInput): Promise<UpdateCardResult> {
+  const card = await prisma.card.findUnique({
+    where: { id, status: { not: 'deleted' } },
+    select: { startDate: true, endDate: true, author: { select: { firebaseUid: true } } },
+  });
+  if (!card) return { ok: false, reason: 'not-found' };
+  if (card.author.firebaseUid !== firebaseUid) return { ok: false, reason: 'forbidden' };
+
+  // Las reglas de fechas dependen de las que ya tiene la card, por eso se resuelven aquí y no al parsear.
+  const { startDate, durationDays, ...fields } = input;
+  const schedule = resolveSchedule(card, { startDate, durationDays });
+  if (!schedule.ok) return { ok: false, reason: 'invalid', error: schedule.error };
+
+  const updated = await prisma.card.update({
+    where: { id },
+    data: { ...fields, ...schedule.data },
+    include: { author: { select: AUTHOR_SELECT } },
+  });
+  return { ok: true, card: updated };
 }
