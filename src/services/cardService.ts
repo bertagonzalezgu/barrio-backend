@@ -46,11 +46,69 @@ function parseOptionalNumber(value: unknown, min: number, max: number): number |
   return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : null;
 }
 
-function parseOptionalDate(value: unknown): Date | undefined | null {
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// Solo fechas de calendario (YYYY-MM-DD): de un instante con hora no se puede saber qué día eligió la persona
+// sin su zona horaria, así que lo rechazamos en vez de adivinar.
+function parseOptionalDateOnly(value: unknown): Date | undefined | null {
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== 'string') return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
+  if (typeof value !== 'string' || !DATE_ONLY.test(value)) return null;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  // El round-trip descarta días que no existen, como 2026-02-30.
+  return !Number.isNaN(date.getTime()) && date.toISOString().startsWith(value) ? date : null;
+}
+
+interface Schedule {
+  startDate: Date | null;
+  endDate: Date | null;
+}
+
+interface ScheduleChange {
+  startDate?: Date;
+  durationDays?: number;
+}
+
+function parseScheduleChange(input: Record<string, unknown>): ParseResult<ScheduleChange> {
+  if (input.endDate !== undefined) {
+    return { ok: false, error: 'La fecha de fin se calcula en el servidor: envía durationDays' };
+  }
+
+  const startDate = parseOptionalDateOnly(input.startDate);
+  if (startDate === null) return { ok: false, error: 'La fecha de inicio debe tener formato YYYY-MM-DD' };
+
+  const { durationDays } = input;
+  if (durationDays !== undefined && (typeof durationDays !== 'number' || !Number.isInteger(durationDays) || durationDays < 1)) {
+    return { ok: false, error: 'La duración debe ser un número entero de días mayor que 0' };
+  }
+
+  return { ok: true, data: { startDate, durationDays } };
+}
+
+// Inclusivo: 5 días empezando el día 1 terminan el día 5. En UTC no hay cambios de hora, así que sumar ms es exacto.
+function computeEndDate(startDate: Date, durationDays: number): Date {
+  return new Date(startDate.getTime() + (durationDays - 1) * MS_PER_DAY);
+}
+
+// Aplica un cambio de fechas sobre las actuales. Mantiene la invariante: startDate y endDate van las dos o ninguna.
+function resolveSchedule(
+  current: Schedule,
+  change: ScheduleChange,
+): ParseResult<{ startDate?: Date; endDate?: Date }> {
+  const { startDate, durationDays } = change;
+  if (startDate === undefined && durationDays === undefined) return { ok: true, data: {} };
+
+  const start = startDate ?? current.startDate;
+  if (!start) return { ok: false, error: 'La duración necesita una fecha de inicio' };
+
+  const days =
+    durationDays ??
+    (current.startDate && current.endDate
+      ? Math.round((current.endDate.getTime() - current.startDate.getTime()) / MS_PER_DAY) + 1
+      : undefined);
+  if (days === undefined) return { ok: false, error: 'Indica la duración en días junto con la fecha de inicio' };
+
+  return { ok: true, data: { startDate: start, endDate: computeEndDate(start, days) } };
 }
 
 export function parseCreateCardInput(body: unknown): ParseResult<CreateCardInput> {
@@ -88,12 +146,11 @@ export function parseCreateCardInput(body: unknown): ParseResult<CreateCardInput
     return { ok: false, error: 'La ubicación necesita lat y lng a la vez' };
   }
 
-  const startDate = parseOptionalDate(input.startDate);
-  const endDate = parseOptionalDate(input.endDate);
-  if (startDate === null || endDate === null) return { ok: false, error: 'Las fechas deben tener formato ISO 8601' };
-  if (startDate && endDate && endDate < startDate) {
-    return { ok: false, error: 'La fecha de fin no puede ser anterior a la de inicio' };
-  }
+  const scheduleChange = parseScheduleChange(input);
+  if (!scheduleChange.ok) return scheduleChange;
+  const schedule = resolveSchedule({ startDate: null, endDate: null }, scheduleChange.data);
+  if (!schedule.ok) return schedule;
+  const { startDate, endDate } = schedule.data;
 
   return {
     ok: true,

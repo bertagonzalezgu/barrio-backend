@@ -44,23 +44,40 @@ describe('POST /api/cards', () => {
   });
 
   // buscar.feature — "Publicar con fecha de inicio y duración de varios días"
-  it('crea la card con todos los campos', async () => {
+  it('crea la card con todos los campos y calcula la fecha de fin', async () => {
     const author = await createAuthor();
-    const body = {
-      ...requiredFields,
-      icon: 'plant',
-      lat: 41.3851,
-      lng: 2.1734,
-      startDate: '2026-10-10T00:00:00.000Z',
-      endDate: '2026-10-15T00:00:00.000Z',
-    };
+    const body = { ...requiredFields, icon: 'plant', lat: 41.3851, lng: 2.1734 };
 
-    const res = await postCardAs(body);
+    const res = await postCardAs({ ...body, startDate: '2026-10-10', durationDays: 5 });
 
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ ...body, authorId: author.id, status: 'active' });
+    expect(res.body).toMatchObject({
+      ...body,
+      authorId: author.id,
+      status: 'active',
+      startDate: '2026-10-10T00:00:00.000Z',
+      endDate: '2026-10-14T00:00:00.000Z',
+    });
     expect(res.body.id).toEqual(expect.any(String));
     expect(await prisma.card.count()).toBe(1);
+  });
+
+  it('una duración de 1 día termina el mismo día que empieza', async () => {
+    await createAuthor();
+
+    const res = await postCardAs({ ...requiredFields, startDate: '2026-10-10', durationDays: 1 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.endDate).toBe('2026-10-10T00:00:00.000Z');
+  });
+
+  it('calcula la fecha de fin cruzando meses', async () => {
+    await createAuthor();
+
+    const res = await postCardAs({ ...requiredFields, startDate: '2026-10-30', durationDays: 5 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.endDate).toBe('2026-11-03T00:00:00.000Z');
   });
 
   // buscar.feature — "Publicar una tarjeta de 'busco' con éxito"
@@ -120,9 +137,35 @@ describe('POST /api/cards', () => {
     ['hours negativo', { hours: -3 }, 'Las horas deben ser un número entero mayor que 0'],
     ['lat sin lng', { lat: 41.3851 }, 'La ubicación necesita lat y lng a la vez'],
     [
-      'endDate anterior a startDate',
-      { startDate: '2026-10-15T00:00:00.000Z', endDate: '2026-10-10T00:00:00.000Z' },
-      'La fecha de fin no puede ser anterior a la de inicio',
+      'startDate con hora',
+      { startDate: '2026-10-09T22:00:00.000Z', durationDays: 5 },
+      'La fecha de inicio debe tener formato YYYY-MM-DD',
+    ],
+    [
+      'startDate inexistente',
+      { startDate: '2026-02-30', durationDays: 5 },
+      'La fecha de inicio debe tener formato YYYY-MM-DD',
+    ],
+    [
+      'durationDays = 0',
+      { startDate: '2026-10-10', durationDays: 0 },
+      'La duración debe ser un número entero de días mayor que 0',
+    ],
+    [
+      'durationDays decimal',
+      { startDate: '2026-10-10', durationDays: 2.5 },
+      'La duración debe ser un número entero de días mayor que 0',
+    ],
+    [
+      'startDate sin durationDays',
+      { startDate: '2026-10-10' },
+      'Indica la duración en días junto con la fecha de inicio',
+    ],
+    ['durationDays sin startDate', { durationDays: 5 }, 'La duración necesita una fecha de inicio'],
+    [
+      'endDate enviada por el cliente',
+      { startDate: '2026-10-10', durationDays: 5, endDate: '2026-10-14' },
+      'La fecha de fin se calcula en el servidor: envía durationDays',
     ],
   ])('devuelve 400 con %s y no guarda la card', async (_case, overrides, error) => {
     await createAuthor();
