@@ -9,7 +9,9 @@ import {
   isMissing,
   type ParseResult,
 } from './cardService';
-import { checkText } from './moderation/blocklist';
+import { checkText, type Verdict } from './moderation/blocklist';
+
+type ReviewHint = Extract<Verdict, { action: 'review' }>['hints'][number];
 
 const GROQ_MODEL = 'qwen/qwen3.8-27b';
 
@@ -60,8 +62,12 @@ function parseJsonObject(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-async function moderate(text: string): Promise<{ seguro: boolean }> {
-  const response = await askGroq(MODERATION_SYSTEM_PROMPT, text);
+async function moderate(text: string, hints: ReviewHint[] = []): Promise<{ seguro: boolean }> {
+  const categories = [...new Set(hints.map((h) => h.category))];
+  const systemPrompt = categories.length
+    ? `${MODERATION_SYSTEM_PROMPT}\nPresta especial atención a: ${categories.join(', ')}`
+    : MODERATION_SYSTEM_PROMPT;
+  const response = await askGroq(systemPrompt, text);
   const { seguro, motivo } = parseJsonObject(response);
   if (typeof seguro !== 'boolean') throw new Error('La moderación no devolvió "seguro" booleano');
   if (!seguro) console.warn('Contenido rechazado por moderación:', motivo);
@@ -71,7 +77,8 @@ async function moderate(text: string): Promise<{ seguro: boolean }> {
 export async function moderateContent(text: string): Promise<{ seguro: boolean; message?: string }> {
   const verdict = checkText(text);
   if (verdict.action === 'block') return { seguro: false, message: verdict.message };
-  return moderate(text);
+  const hints = verdict.action === 'review' ? verdict.hints : [];
+  return moderate(text, hints);
 }
 
 async function generate({ prompt, type, category }: GenerateCardInput): Promise<GeneratedCard> {
