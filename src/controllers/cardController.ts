@@ -9,7 +9,7 @@ import {
   parseUpdateCardInput,
   updateCard,
 } from '../services/cardService';
-import { generateCardWithAI, parseGenerateCardInput } from '../services/aiCardService';
+import { generateCardWithAI, moderateContent, parseGenerateCardInput } from '../services/aiCardService';
 
 export async function postCard(req: Request, res: Response): Promise<void> {
   if (!req.user) {
@@ -20,6 +20,19 @@ export async function postCard(req: Request, res: Response): Promise<void> {
   const parsed = parseCreateCardInput(req.body);
   if (!parsed.ok) {
     res.status(400).json({ error: parsed.error });
+    return;
+  }
+
+  // Segunda moderación: el texto generado por IA se puede editar antes de publicar
+  try {
+    const moderation = await moderateContent(parsed.data.description);
+    if (!moderation.seguro) {
+      res.status(422).json({ error: 'content_rejected' });
+      return;
+    }
+  } catch (error) {
+    console.error('Fallo al moderar la card:', error);
+    res.status(500).json({ error: 'moderation_failed' });
     return;
   }
 
