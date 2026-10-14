@@ -229,7 +229,7 @@ describe('POST /api/cards', () => {
     await postCardAs({ ...requiredFields, description: 'Te dejo las llaves para regar las plantas' });
 
     const [[params]] = mockGroqCreate.mock.calls;
-    expect(params.messages[0].content).toContain('Presta especial atención a: home_access_ambiguous');
+    expect(params.messages[0].content).toContain('Presta especial atención a: oferta que implica acceso a domicilio privado de forma ambigua');
   });
 
   it('devuelve 500 moderation_failed si la moderación falla y no guarda la card', async () => {

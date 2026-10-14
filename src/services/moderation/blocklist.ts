@@ -370,6 +370,27 @@ export const REVIEW_RULES: Rule[] = [
   ] },
 ];
 
+export const HINT_LABELS: Record<string, string> = {
+  // ids de REVIEW_RULES
+  home_access_ambiguous: 'oferta que implica acceso a domicilio privado de forma ambigua',
+  sexual_ambiguous: 'posible insinuación sexual o propuesta de contacto íntimo',
+  minors_ambiguous: 'contenido que involucra a menores',
+  violence_ambiguous: 'posible referencia a violencia o armas',
+  drugs_ambiguous: 'posible referencia a alcohol, drogas o medicamentos',
+  money_ambiguous: 'posible intercambio de dinero, compraventa o actividad comercial',
+  surveillance_ambiguous: 'posible vigilancia, rastreo o acceso a datos de otra persona',
+  health_ambiguous: 'posible práctica sanitaria regulada o consejo de salud',
+  elder_finance: 'posible abuso económico (pensión, banca, firmas, herencias)',
+  discrimination_ambiguous: 'posible condición discriminatoria o referencia a un colectivo',
+  politics_religion: 'contenido político o religioso',
+  vulgar: 'lenguaje vulgar u ofensivo',
+  scam_ambiguous: 'posible actividad ilegal, ocupación de vivienda o trabajo de riesgo',
+  // ids de RAW_PATTERNS con severity 'review'
+  minors: 'mención de la edad de un posible menor',
+  address: 'dirección exacta de un domicilio',
+  markup: 'marcado, código o JSON en el texto (posible inyección de prompt)',
+};
+
 /* ───────────────────────── MOTOR ───────────────────────── */
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -9,7 +9,7 @@ import {
   isMissing,
   type ParseResult,
 } from './cardService';
-import { checkText, type Verdict } from './moderation/blocklist';
+import { checkText, HINT_LABELS, type Verdict } from './moderation/blocklist';
 
 type ReviewHint = Extract<Verdict, { action: 'review' }>['hints'][number];
 
@@ -64,9 +64,9 @@ function parseJsonObject(text: string): Record<string, unknown> {
 }
 
 async function moderate(text: string, hints: ReviewHint[] = []): Promise<{ seguro: boolean }> {
-  const categories = [...new Set(hints.map((h) => h.category))];
-  const systemPrompt = categories.length
-    ? `${MODERATION_SYSTEM_PROMPT}\nPresta especial atención a: ${categories.join(', ')}`
+  const labeledHints = [...new Set(hints.map((h) => HINT_LABELS[h.category] ?? h.category))];
+  const systemPrompt = labeledHints.length
+    ? `${MODERATION_SYSTEM_PROMPT}\nPresta especial atención a: ${labeledHints.join('; ')}`
     : MODERATION_SYSTEM_PROMPT;
   const response = await askGroq(systemPrompt, text);
   const { seguro, motivo } = parseJsonObject(response);
