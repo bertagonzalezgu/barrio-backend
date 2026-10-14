@@ -29,7 +29,8 @@ export interface GeneratedCard {
 
 type GenerateCardResult =
   | { ok: true; card: GeneratedCard }
-  | { ok: false; reason: 'content-rejected' | 'generation-failed' };
+  | { ok: false; reason: 'content-rejected'; message?: string }
+  | { ok: false; reason: 'generation-failed' };
 
 export function parseGenerateCardInput(body: unknown): ParseResult<GenerateCardInput> {
   const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
@@ -98,7 +99,7 @@ async function generate({ prompt, type, category }: GenerateCardInput): Promise<
 export async function generateCardWithAI(input: GenerateCardInput): Promise<GenerateCardResult> {
   try {
     const moderation = await moderateContent(input.prompt);
-    if (!moderation.seguro) return { ok: false, reason: 'content-rejected' };
+    if (!moderation.seguro) return { ok: false, reason: 'content-rejected', message: moderation.message };
     return { ok: true, card: await generate(input) };
   } catch (error) {
     console.error('Fallo al generar la card con IA:', error);

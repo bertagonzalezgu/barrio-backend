@@ -17,7 +17,7 @@ async function rejectedByModeration(text: string, res: Response): Promise<boolea
   try {
     const moderation = await moderateContent(text);
     if (moderation.seguro) return false;
-    res.status(422).json({ error: 'content_rejected' });
+    res.status(422).json({ error: 'content_rejected', message: moderation.message });
   } catch (error) {
     console.error('Fallo al moderar la card:', error);
     res.status(500).json({ error: 'moderation_failed' });
@@ -67,9 +67,11 @@ export async function generateCard(req: Request, res: Response): Promise<void> {
 
   const result = await generateCardWithAI(parsed.data);
   if (!result.ok) {
-    const status = result.reason === 'content-rejected' ? 422 : 500;
-    const error = result.reason === 'content-rejected' ? 'content_rejected' : 'generation_failed';
-    res.status(status).json({ error });
+    if (result.reason === 'content-rejected') {
+      res.status(422).json({ error: 'content_rejected', message: result.message });
+      return;
+    }
+    res.status(500).json({ error: 'generation_failed' });
     return;
   }
 
