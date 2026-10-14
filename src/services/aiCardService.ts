@@ -9,6 +9,7 @@ import {
   isMissing,
   type ParseResult,
 } from './cardService';
+import { checkText } from './moderation/blocklist';
 
 const GROQ_MODEL = 'qwen/qwen3.8-27b';
 
@@ -59,11 +60,18 @@ function parseJsonObject(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-export async function moderateContent(text: string): Promise<{ seguro: boolean; motivo: unknown }> {
+async function moderate(text: string): Promise<{ seguro: boolean }> {
   const response = await askGroq(MODERATION_SYSTEM_PROMPT, text);
   const { seguro, motivo } = parseJsonObject(response);
   if (typeof seguro !== 'boolean') throw new Error('La moderación no devolvió "seguro" booleano');
-  return { seguro, motivo };
+  if (!seguro) console.warn('Contenido rechazado por moderación:', motivo);
+  return { seguro };
+}
+
+export async function moderateContent(text: string): Promise<{ seguro: boolean; message?: string }> {
+  const verdict = checkText(text);
+  if (verdict.action === 'block') return { seguro: false, message: verdict.message };
+  return moderate(text);
 }
 
 async function generate({ prompt, type, category }: GenerateCardInput): Promise<GeneratedCard> {
@@ -83,10 +91,7 @@ async function generate({ prompt, type, category }: GenerateCardInput): Promise<
 export async function generateCardWithAI(input: GenerateCardInput): Promise<GenerateCardResult> {
   try {
     const moderation = await moderateContent(input.prompt);
-    if (!moderation.seguro) {
-      console.warn('Contenido rechazado por moderación:', moderation.motivo);
-      return { ok: false, reason: 'content-rejected' };
-    }
+    if (!moderation.seguro) return { ok: false, reason: 'content-rejected' };
     return { ok: true, card: await generate(input) };
   } catch (error) {
     console.error('Fallo al generar la card con IA:', error);
