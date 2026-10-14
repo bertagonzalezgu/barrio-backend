@@ -59,9 +59,9 @@ function parseJsonObject(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-async function moderate(prompt: string): Promise<{ seguro: boolean; motivo: unknown }> {
-  const text = await askGroq(MODERATION_SYSTEM_PROMPT, prompt);
-  const { seguro, motivo } = parseJsonObject(text);
+export async function moderateContent(text: string): Promise<{ seguro: boolean; motivo: unknown }> {
+  const response = await askGroq(MODERATION_SYSTEM_PROMPT, text);
+  const { seguro, motivo } = parseJsonObject(response);
   if (typeof seguro !== 'boolean') throw new Error('La moderación no devolvió "seguro" booleano');
   return { seguro, motivo };
 }
@@ -82,7 +82,7 @@ async function generate({ prompt, type, category }: GenerateCardInput): Promise<
 
 export async function generateCardWithAI(input: GenerateCardInput): Promise<GenerateCardResult> {
   try {
-    const moderation = await moderate(input.prompt);
+    const moderation = await moderateContent(input.prompt);
     if (!moderation.seguro) {
       console.warn('Contenido rechazado por moderación:', moderation.motivo);
       return { ok: false, reason: 'content-rejected' };
