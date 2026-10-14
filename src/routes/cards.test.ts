@@ -209,6 +209,29 @@ describe('POST /api/cards', () => {
     expect(await prisma.card.count()).toBe(0);
   });
 
+  it('devuelve 422 con el message de la blocklist sin llamar a la IA y no guarda la card', async () => {
+    await createAuthor();
+
+    const res = await postCardAs({ ...requiredFields, description: 'Riego tus plantas, pásame tu número por whatsapp' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({
+      error: 'content_rejected',
+      message: 'Para hablar, usa el chat de barrio.; no compartas contactos externos.',
+    });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await prisma.card.count()).toBe(0);
+  });
+
+  it('pasa las pistas de la blocklist al prompt de moderación de la IA', async () => {
+    await createAuthor();
+
+    await postCardAs({ ...requiredFields, description: 'Te dejo las llaves para regar las plantas' });
+
+    const [[params]] = mockGroqCreate.mock.calls;
+    expect(params.messages[0].content).toContain('Presta especial atención a: home_access_ambiguous');
+  });
+
   it('devuelve 500 moderation_failed si la moderación falla y no guarda la card', async () => {
     await createAuthor();
     mockGroqCreate.mockRejectedValue(new Error('network down'));
