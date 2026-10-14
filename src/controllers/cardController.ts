@@ -11,6 +11,20 @@ import {
 } from '../services/cardService';
 import { generateCardWithAI, moderateContent, parseGenerateCardInput } from '../services/aiCardService';
 
+// Segunda moderación: el texto generado por IA se puede editar antes de publicar o después.
+// Devuelve true si ya ha respondido (422 o 500) y no hay que guardar nada.
+async function rejectedByModeration(text: string, res: Response): Promise<boolean> {
+  try {
+    const moderation = await moderateContent(text);
+    if (moderation.seguro) return false;
+    res.status(422).json({ error: 'content_rejected' });
+  } catch (error) {
+    console.error('Fallo al moderar la card:', error);
+    res.status(500).json({ error: 'moderation_failed' });
+  }
+  return true;
+}
+
 export async function postCard(req: Request, res: Response): Promise<void> {
   if (!req.user) {
     res.status(401).json({ error: 'No autenticado' });
@@ -23,18 +37,7 @@ export async function postCard(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  // Segunda moderación: el texto generado por IA se puede editar antes de publicar
-  try {
-    const moderation = await moderateContent(parsed.data.description);
-    if (!moderation.seguro) {
-      res.status(422).json({ error: 'content_rejected' });
-      return;
-    }
-  } catch (error) {
-    console.error('Fallo al moderar la card:', error);
-    res.status(500).json({ error: 'moderation_failed' });
-    return;
-  }
+  if (await rejectedByModeration(parsed.data.description, res)) return;
 
   const result = await createCard(req.user.uid, parsed.data);
   if (!result.ok) {
@@ -119,6 +122,9 @@ export async function patchCard(req: Request<{ id: string }>, res: Response): Pr
     res.status(400).json({ error: parsed.error });
     return;
   }
+
+  const { description } = parsed.data;
+  if (description !== undefined && (await rejectedByModeration(description, res))) return;
 
   const result = await updateCard(req.params.id, req.user.uid, parsed.data);
   if (!result.ok) {
