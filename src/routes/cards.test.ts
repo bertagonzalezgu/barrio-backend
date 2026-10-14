@@ -574,4 +574,43 @@ describe('PATCH /api/cards/:id', () => {
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Indica la duración en días junto con la fecha de inicio' });
   });
+
+  it('modera la nueva descripción antes de guardar', async () => {
+    const card = await seedCard();
+
+    await patchCardAs(AUTHOR_UID, card.id, { description: 'Riego y abono tus plantas' });
+
+    const [[params]] = mockGroqCreate.mock.calls;
+    expect(params.messages.at(-1).content).toBe('Riego y abono tus plantas');
+  });
+
+  it('devuelve 422 content_rejected si la nueva descripción no pasa la moderación y no cambia la card', async () => {
+    const card = await seedCard();
+    moderationReturns({ seguro: false, motivo: 'acceso indebido a vivienda' });
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { description: 'Texto problemático' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected' });
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject(requiredFields);
+  });
+
+  it('devuelve 500 moderation_failed si la moderación falla y no cambia la card', async () => {
+    const card = await seedCard();
+    mockGroqCreate.mockRejectedValue(new Error('network down'));
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { description: 'Riego y abono tus plantas' });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'moderation_failed' });
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject(requiredFields);
+  });
+
+  it('no llama a la moderación si no se cambia la descripción', async () => {
+    const card = await seedCard();
+
+    await patchCardAs(AUTHOR_UID, card.id, { hours: 4 });
+
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
 });
