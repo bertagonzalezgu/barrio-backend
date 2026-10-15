@@ -35,10 +35,8 @@ export async function postCard(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  const textToModerate = [parsed.data.title, parsed.data.description]
-    .filter(Boolean)
-    .join(' ')
-  const moderation = await moderateContent(textToModerate)
+  const textToModerate = [parsed.data.title, parsed.data.description].filter(Boolean).join(' ');
+  if (await rejectedByModeration(textToModerate, res)) return;
 
   const result = await createCard(req.user.uid, parsed.data);
   if (!result.ok) {
@@ -114,6 +112,21 @@ const UPDATE_ERRORS = {
   forbidden: { status: 403, error: 'Only the author can edit this card' },
 } as const;
 
+// Si solo cambia uno de los dos campos, se modera junto al valor guardado del otro para que el clasificador vea la card completa.
+async function textToModerateOnUpdate(
+  id: string,
+  firebaseUid: string,
+  { title, description }: { title?: string; description?: string },
+): Promise<string> {
+  if (title === undefined && description === undefined) return '';
+
+  const card = await findCardById(id);
+  // Sin card o sin permiso no se modera: updateCard responde el 404/403.
+  if (!card || card.author.firebaseUid !== firebaseUid) return '';
+
+  return [title ?? card.title, description ?? card.description].filter(Boolean).join(' ');
+}
+
 export async function patchCard(req: Request<{ id: string }>, res: Response): Promise<void> {
   if (!req.user) {
     res.status(401).json({ error: 'No autenticado' });
@@ -126,8 +139,8 @@ export async function patchCard(req: Request<{ id: string }>, res: Response): Pr
     return;
   }
 
-  const { description } = parsed.data;
-  if (description !== undefined && (await rejectedByModeration(description, res))) return;
+  const textToModerate = await textToModerateOnUpdate(req.params.id, req.user.uid, parsed.data);
+  if (textToModerate && (await rejectedByModeration(textToModerate, res))) return;
 
   const result = await updateCard(req.params.id, req.user.uid, parsed.data);
   if (!result.ok) {
