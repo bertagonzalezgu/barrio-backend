@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma';
-import type { ExchangeStatus, Prisma } from '../generated/prisma/client';
+import type { CardType, ExchangeStatus, Prisma } from '../generated/prisma/client';
 
 export const WELCOME_CREDIT_HOURS = 2;
 
@@ -32,6 +32,11 @@ export async function grantWelcomeCredit(userId: string): Promise<boolean> {
 }
 
 // Paga quien recibe la ayuda: en una card offer es quien propone, en una request es la autora (receptora).
+// payerOf y paidBy expresan la misma regla, una para un intercambio concreto y otra como filtro de consulta.
+export function payerOf(cardType: CardType, exchange: { proposerId: string; receiverId: string }): string {
+  return cardType === 'offer' ? exchange.proposerId : exchange.receiverId;
+}
+
 function paidBy(userId: string): Prisma.ExchangeWhereInput {
   return {
     OR: [

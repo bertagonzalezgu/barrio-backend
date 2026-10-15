@@ -1,11 +1,20 @@
 import { prisma } from '../config/prisma';
-import type { Exchange, ExchangeStatus, Prisma } from '../generated/prisma/client';
+import type { CardStatus, CardType, Exchange, ExchangeStatus, Prisma } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
-import { getBalanceByUserId, RESERVING_STATUSES } from './walletService';
+import { getBalanceByUserId, payerOf, RESERVING_STATUSES } from './walletService';
 
 type Tx = Prisma.TransactionClient;
 
-export type ExchangeFailure = 'user-not-found' | 'card-not-found' | 'card-unavailable' | 'own-card' | 'already-proposed' | 'insufficient-balance';
+export type ExchangeFailure =
+  | 'user-not-found'
+  | 'card-not-found'
+  | 'card-unavailable'
+  | 'own-card'
+  | 'already-proposed'
+  | 'insufficient-balance'
+  | 'exchange-not-found'
+  | 'forbidden'
+  | 'invalid-transition';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
@@ -101,4 +110,74 @@ export async function getMyExchangeOnCard(firebaseUid: string, cardId: string): 
     isCardTaken(prisma, cardId),
   ]);
   return { ok: true, state: { mine, cardAvailable: card.status === 'active' && !taken } };
+}
+
+interface TransitionRule {
+  actor: 'receiver' | 'participant';
+  from: ExchangeStatus[];
+  data: () => Prisma.ExchangeUpdateInput;
+}
+
+const TRANSITIONS = {
+  accept: { actor: 'receiver', from: ['proposed'], data: () => ({ status: 'accepted', acceptedAt: new Date() }) },
+} satisfies Record<string, TransitionRule>;
+
+export type ExchangeAction = keyof typeof TRANSITIONS;
+
+// Mismo orden de bloqueo en todas las operaciones (card y después usuaria pagadora) para no provocar interbloqueos.
+async function lockUser(tx: Tx, userId: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+}
+
+interface ExchangeToAccept {
+  cardId: string;
+  proposerId: string;
+  receiverId: string;
+  hours: number;
+  card: { type: CardType; status: CardStatus };
+}
+
+// Bloquear a la pagadora serializa sus aceptaciones aunque sean de cards distintas: la segunda ve la reserva de la primera.
+async function acceptBlocker(tx: Tx, exchange: ExchangeToAccept): Promise<ExchangeFailure | null> {
+  if (exchange.card.status !== 'active' || (await isCardTaken(tx, exchange.cardId))) return 'card-unavailable';
+  const payerId = payerOf(exchange.card.type, exchange);
+  await lockUser(tx, payerId);
+  return (await canAfford(tx, payerId, exchange.hours)) ? null : 'insufficient-balance';
+}
+
+// Fuera de la transacción solo se lee lo que no cambia (participantes y card) para saber qué card bloquear;
+// el estado se vuelve a leer ya con el bloqueo puesto.
+export async function transitionExchange(
+  firebaseUid: string,
+  exchangeId: string,
+  action: ExchangeAction,
+): Promise<ExchangeResult> {
+  const rule: TransitionRule = TRANSITIONS[action];
+  const userId = await findUserId(firebaseUid);
+  if (!userId) return fail('user-not-found');
+
+  const parties = await prisma.exchange.findUnique({
+    where: { id: exchangeId },
+    select: { cardId: true, proposerId: true, receiverId: true },
+  });
+  // A quien no participa no le decimos que el intercambio existe.
+  if (!parties || (parties.proposerId !== userId && parties.receiverId !== userId)) return fail('exchange-not-found');
+  if (rule.actor === 'receiver' && parties.receiverId !== userId) return fail('forbidden');
+
+  return prisma.$transaction(async (tx) => {
+    await lockCard(tx, parties.cardId);
+    const exchange = await tx.exchange.findUniqueOrThrow({
+      where: { id: exchangeId },
+      include: { card: { select: { type: true, status: true } } },
+    });
+    if (!rule.from.includes(exchange.status)) return fail('invalid-transition');
+
+    if (action === 'accept') {
+      const blocker = await acceptBlocker(tx, exchange);
+      if (blocker) return fail(blocker);
+    }
+
+    const updated = await tx.exchange.update({ where: { id: exchangeId }, data: rule.data() });
+    return { ok: true, exchange: updated };
+  });
 }

@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { prisma } from '../config/prisma';
 import type { CardStatus, CardType } from '../generated/prisma/client';
+import { getBalance } from '../services/walletService';
 
 const mockVerifyIdToken = vi.fn();
 
@@ -298,5 +299,112 @@ describe('GET /api/exchanges/card/:cardId', () => {
 
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: 'Usuario no registrado' });
+  });
+});
+
+function transition(uid: string, exchangeId: string, action: 'accept' | 'reject' | 'cancel') {
+  return request(app).patch(`/api/exchanges/${exchangeId}/${action}`).set('Authorization', `Bearer ${uid}`);
+}
+
+// Autora con saldo, proponente con saldo y una propuesta en `proposed` sobre una card del tipo indicado.
+async function setupProposal(type: CardType, { hours = 3, authorHours = 5, proposerHours = 5 } = {}) {
+  const author = await createUser(AUTHOR_UID, authorHours);
+  const proposer = await createUser(PROPOSER_UID, proposerHours);
+  const card = await createCard(author.id, { type, hours });
+  const exchange = await prisma.exchange.create({
+    data: { cardId: card.id, proposerId: proposer.id, receiverId: author.id, hours },
+  });
+  return { author, proposer, card, exchange };
+}
+
+describe('PATCH /api/exchanges/:id/accept', () => {
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).patch('/api/exchanges/x/accept');
+    expect(res.status).toBe(401);
+  });
+
+  it('en una card offer pasa a accepted y reserva las horas de quien propone', async () => {
+    const { exchange } = await setupProposal('offer');
+
+    const res = await transition(AUTHOR_UID, exchange.id, 'accept');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: exchange.id, status: 'accepted', acceptedAt: expect.any(String) });
+    expect(await getBalance(PROPOSER_UID)).toEqual({ balance: 5, reserved: 3, available: 2 });
+    expect(await getBalance(AUTHOR_UID)).toEqual({ balance: 5, reserved: 0, available: 5 });
+    expect(await prisma.timeTransaction.count({ where: { exchangeId: exchange.id } })).toBe(0);
+  });
+
+  it('en una card request pasa a accepted y reserva las horas de la autora', async () => {
+    const { exchange } = await setupProposal('request');
+
+    const res = await transition(AUTHOR_UID, exchange.id, 'accept');
+
+    expect(res.status).toBe(200);
+    expect(await getBalance(AUTHOR_UID)).toEqual({ balance: 5, reserved: 3, available: 2 });
+    expect(await getBalance(PROPOSER_UID)).toEqual({ balance: 5, reserved: 0, available: 5 });
+  });
+
+  it('devuelve 403 si quien acepta es la proponente', async () => {
+    const { exchange } = await setupProposal('request');
+
+    const res = await transition(PROPOSER_UID, exchange.id, 'accept');
+
+    expect(res.status).toBe(403);
+    expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe('proposed');
+  });
+
+  it('devuelve 404 si el intercambio no existe o no participo en él', async () => {
+    const { exchange } = await setupProposal('request');
+    await createUser('uid-ajena');
+
+    expect((await transition('uid-ajena', exchange.id, 'accept')).status).toBe(404);
+    expect((await transition(AUTHOR_UID, '00000000-0000-0000-0000-000000000000', 'accept')).status).toBe(404);
+  });
+
+  it.each(['accepted', 'rejected', 'cancelled'] as const)('devuelve 409 invalid_transition si el intercambio está %s', async (status) => {
+    const { exchange } = await setupProposal('request');
+    await prisma.exchange.update({ where: { id: exchange.id }, data: { status } });
+
+    const res = await transition(AUTHOR_UID, exchange.id, 'accept');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'invalid_transition' });
+  });
+
+  it('devuelve 409 card_unavailable si la card ya tiene otra propuesta aceptada', async () => {
+    const { author, card, exchange } = await setupProposal('request');
+    const other = await createUser('uid-otra');
+    const second = await prisma.exchange.create({
+      data: { cardId: card.id, proposerId: other.id, receiverId: author.id, hours: card.hours },
+    });
+    await transition(AUTHOR_UID, exchange.id, 'accept');
+
+    const res = await transition(AUTHOR_UID, second.id, 'accept');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'card_unavailable' });
+    expect((await prisma.exchange.findUniqueOrThrow({ where: { id: second.id } })).status).toBe('proposed');
+  });
+
+  it('devuelve 409 card_unavailable si la card ya no está activa', async () => {
+    const { card, exchange } = await setupProposal('request');
+    await prisma.card.update({ where: { id: card.id }, data: { status: 'completed' } });
+
+    const res = await transition(AUTHOR_UID, exchange.id, 'accept');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'card_unavailable' });
+  });
+
+  // wallet.feature — "Saldo insuficiente": en una card request paga la autora y se comprueba al aceptar
+  it('devuelve 409 insufficient_balance si la pagadora no tiene saldo disponible suficiente', async () => {
+    const { exchange } = await setupProposal('request', { hours: 3, authorHours: 2 });
+
+    const res = await transition(AUTHOR_UID, exchange.id, 'accept');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'insufficient_balance' });
+    expect(await getBalance(AUTHOR_UID)).toEqual({ balance: 2, reserved: 0, available: 2 });
   });
 });
