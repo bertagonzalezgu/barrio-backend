@@ -111,4 +111,21 @@ describe('POST /api/exchanges', () => {
     expect(res.status).toBe(403);
     expect(await prisma.exchange.count()).toBe(0);
   });
+
+  // match.feature — "La card ya tiene un intercambio aceptado con otra persona"
+  it.each(['accepted', 'done'] as const)('devuelve 409 card_unavailable si la card ya tiene un intercambio %s', async (status) => {
+    const author = await createUser(AUTHOR_UID);
+    const other = await createUser('uid-otra');
+    await createUser(PROPOSER_UID);
+    const card = await createCard(author.id);
+    await prisma.exchange.create({
+      data: { cardId: card.id, proposerId: other.id, receiverId: author.id, hours: card.hours, status },
+    });
+
+    const res = await propose(PROPOSER_UID, { cardId: card.id });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'card_unavailable' });
+    expect(await prisma.exchange.count()).toBe(1);
+  });
 });

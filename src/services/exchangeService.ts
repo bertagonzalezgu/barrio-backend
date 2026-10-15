@@ -1,6 +1,7 @@
 import { prisma } from '../config/prisma';
 import type { Exchange, Prisma } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
+import { RESERVING_STATUSES } from './walletService';
 
 type Tx = Prisma.TransactionClient;
 
@@ -35,6 +36,11 @@ async function lockCard(tx: Tx, cardId: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM "Card" WHERE id = ${cardId} FOR UPDATE`;
 }
 
+// Una card queda cogida en cuanto tiene un intercambio que reserva horas: son los mismos estados que usa el saldo.
+async function isCardTaken(db: Tx, cardId: string): Promise<boolean> {
+  return (await db.exchange.count({ where: { cardId, status: { in: RESERVING_STATUSES } } })) > 0;
+}
+
 export async function createExchange(firebaseUid: string, { cardId }: CreateExchangeInput): Promise<ExchangeResult> {
   const proposerId = await findUserId(firebaseUid);
   if (!proposerId) return fail('user-not-found');
@@ -45,6 +51,7 @@ export async function createExchange(firebaseUid: string, { cardId }: CreateExch
     if (!card) return fail('card-not-found');
     if (card.status !== 'active') return fail('card-unavailable');
     if (card.authorId === proposerId) return fail('own-card');
+    if (await isCardTaken(tx, card.id)) return fail('card-unavailable');
 
     const exchange = await tx.exchange.create({
       data: { cardId: card.id, proposerId, receiverId: card.authorId, hours: card.hours },
