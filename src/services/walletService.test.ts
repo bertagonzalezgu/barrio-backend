@@ -1,15 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../config/prisma';
-import type { ExchangeStatus } from '../generated/prisma/client';
-import { grantWelcomeCredit, getBalance, WELCOME_CREDIT_HOURS } from './walletService';
+import type { CardType, ExchangeStatus } from '../generated/prisma/client';
+import { grantWelcomeCredit, getBalance, getBalanceByUserId, WELCOME_CREDIT_HOURS } from './walletService';
 
 async function createUser(firebaseUid = 'uid-wallet-001') {
   return prisma.user.create({ data: { firebaseUid, name: 'Ana', email: `${firebaseUid}@barrio.local` } });
 }
 
-async function createExchange(proposerId: string, receiverId: string, hours: number, status: ExchangeStatus) {
+async function createExchange(
+  proposerId: string,
+  receiverId: string,
+  hours: number,
+  status: ExchangeStatus,
+  type: CardType = 'offer',
+) {
   const card = await prisma.card.create({
-    data: { authorId: receiverId, type: 'offer', title: 'Card', description: 'Desc', category: 'home_repairs', hours },
+    data: { authorId: receiverId, type, title: 'Card', description: 'Desc', category: 'home_repairs', hours },
   });
   return prisma.exchange.create({ data: { cardId: card.id, proposerId, receiverId, hours, status } });
 }
@@ -88,7 +94,7 @@ describe('walletService', () => {
       expect((await getBalance('uid-bea'))?.balance).toBe(3);
     });
 
-    it('cuenta como reservadas las horas del proponente en intercambios aceptados o realizados', async () => {
+    it('en cards offer cuenta como reservadas las horas del proponente en intercambios aceptados o realizados', async () => {
       const ana = await createUser('uid-ana');
       const bea = await createUser('uid-bea');
       await prisma.timeTransaction.create({ data: { type: 'transfer', toUserId: ana.id, hours: 5 } });
@@ -102,8 +108,33 @@ describe('walletService', () => {
       expect(await getBalance('uid-bea')).toEqual({ balance: 0, reserved: 0, available: 0 });
     });
 
+    // En una card "busco" quien recibe la ayuda (y paga) es la autora, no quien propone.
+    it('en cards request cuenta como reservadas las horas de la autora (receptora), no las del proponente', async () => {
+      const ana = await createUser('uid-ana');
+      const bea = await createUser('uid-bea');
+      await prisma.timeTransaction.create({ data: { type: 'transfer', toUserId: bea.id, hours: 5 } });
+      await createExchange(ana.id, bea.id, 1, 'accepted', 'request');
+      await createExchange(ana.id, bea.id, 2, 'done', 'request');
+      await createExchange(ana.id, bea.id, 4, 'proposed', 'request');
+      await createExchange(ana.id, bea.id, 4, 'rejected', 'request');
+
+      expect(await getBalance('uid-bea')).toEqual({ balance: 5, reserved: 3, available: 2 });
+      expect(await getBalance('uid-ana')).toEqual({ balance: 0, reserved: 0, available: 0 });
+    });
+
     it('devuelve null si no existe el usuario', async () => {
       expect(await getBalance('uid-inexistente')).toBeNull();
+    });
+  });
+
+  describe('getBalanceByUserId', () => {
+    it('calcula el mismo saldo que getBalance a partir del id interno', async () => {
+      const ana = await createUser('uid-ana');
+      const bea = await createUser('uid-bea');
+      await prisma.timeTransaction.create({ data: { type: 'transfer', toUserId: ana.id, hours: 5 } });
+      await createExchange(ana.id, bea.id, 2, 'accepted');
+
+      expect(await getBalanceByUserId(ana.id)).toEqual({ balance: 5, reserved: 2, available: 3 });
     });
   });
 });
