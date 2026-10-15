@@ -4,7 +4,7 @@ import type { ParseResult } from './cardService';
 
 type Tx = Prisma.TransactionClient;
 
-export type ExchangeFailure = 'user-not-found' | 'card-not-found' | 'card-unavailable';
+export type ExchangeFailure = 'user-not-found' | 'card-not-found' | 'card-unavailable' | 'own-card';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
@@ -44,6 +44,7 @@ export async function createExchange(firebaseUid: string, { cardId }: CreateExch
     const card = await tx.card.findUnique({ where: { id: cardId, status: { not: 'deleted' } } });
     if (!card) return fail('card-not-found');
     if (card.status !== 'active') return fail('card-unavailable');
+    if (card.authorId === proposerId) return fail('own-card');
 
     const exchange = await tx.exchange.create({
       data: { cardId: card.id, proposerId, receiverId: card.authorId, hours: card.hours },

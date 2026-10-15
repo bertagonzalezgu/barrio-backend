@@ -100,4 +100,15 @@ describe('POST /api/exchanges', () => {
     expect(res.body).toEqual({ error: 'card_unavailable' });
     expect(await prisma.exchange.count()).toBe(0);
   });
+
+  // match.feature — "No se puede proponer intercambio a la propia card"
+  it('devuelve 403 si la autora intenta proponer sobre su propia card', async () => {
+    const author = await createUser(AUTHOR_UID);
+    const card = await createCard(author.id);
+
+    const res = await propose(AUTHOR_UID, { cardId: card.id });
+
+    expect(res.status).toBe(403);
+    expect(await prisma.exchange.count()).toBe(0);
+  });
 });
