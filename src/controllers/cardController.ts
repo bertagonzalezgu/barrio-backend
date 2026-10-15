@@ -11,8 +11,6 @@ import {
 } from '../services/cardService';
 import { generateCardWithAI, moderateContent, parseGenerateCardInput } from '../services/aiCardService';
 
-// Segunda moderación: el texto generado por IA se puede editar antes de publicar o después.
-// Devuelve true si ya ha respondido (422 o 500) y no hay que guardar nada.
 async function rejectedByModeration(text: string, res: Response): Promise<boolean> {
   try {
     const moderation = await moderateContent(text);
@@ -37,7 +35,10 @@ export async function postCard(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  if (await rejectedByModeration(parsed.data.description, res)) return;
+  const textToModerate = [parsed.data.title, parsed.data.description]
+    .filter(Boolean)
+    .join(' ')
+  const moderation = await moderateContent(textToModerate)
 
   const result = await createCard(req.user.uid, parsed.data);
   if (!result.ok) {
