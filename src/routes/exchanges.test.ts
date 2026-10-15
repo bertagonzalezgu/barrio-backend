@@ -35,6 +35,10 @@ function propose(uid: string, body: Record<string, unknown>) {
   return request(app).post('/api/exchanges').set('Authorization', `Bearer ${uid}`).send(body);
 }
 
+function getCardState(uid: string, cardId: string) {
+  return request(app).get(`/api/exchanges/card/${cardId}`).set('Authorization', `Bearer ${uid}`);
+}
+
 describe('POST /api/exchanges', () => {
   it('devuelve 401 sin token', async () => {
     const res = await request(app).post('/api/exchanges').send({ cardId: 'x' });
@@ -210,5 +214,89 @@ describe('POST /api/exchanges', () => {
     const card = await createCard(author.id, { type: 'request', hours: 3 });
 
     expect((await propose(PROPOSER_UID, { cardId: card.id })).status).toBe(201);
+  });
+});
+
+describe('GET /api/exchanges/card/:cardId', () => {
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).get('/api/exchanges/card/x');
+    expect(res.status).toBe(401);
+  });
+
+  // match.feature — "Ya he propuesto y no han respondido: veo Propuesta enviada"
+  it('devuelve mi propuesta pendiente sobre la card', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID);
+    const card = await createCard(author.id);
+    const proposal = await propose(PROPOSER_UID, { cardId: card.id });
+
+    const res = await getCardState(PROPOSER_UID, card.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ mine: { id: proposal.body.id, status: 'proposed' }, cardAvailable: true });
+  });
+
+  it('devuelve mine null si no he propuesto nada, y también para la autora', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID);
+    await createUser('uid-otra');
+    const card = await createCard(author.id);
+    await propose('uid-otra', { cardId: card.id });
+
+    for (const uid of [PROPOSER_UID, AUTHOR_UID]) {
+      const res = await getCardState(uid, card.id);
+      expect(res.body).toEqual({ mine: null, cardAvailable: true });
+    }
+  });
+
+  it('devuelve mi propuesta más reciente si he vuelto a proponer tras cancelar', async () => {
+    const author = await createUser(AUTHOR_UID);
+    const proposer = await createUser(PROPOSER_UID);
+    const card = await createCard(author.id);
+    const base = { cardId: card.id, proposerId: proposer.id, receiverId: author.id, hours: card.hours };
+    await prisma.exchange.create({ data: { ...base, status: 'cancelled', proposedAt: new Date('2026-10-01') } });
+    const latest = await prisma.exchange.create({ data: { ...base, status: 'proposed', proposedAt: new Date('2026-10-02') } });
+
+    const res = await getCardState(PROPOSER_UID, card.id);
+
+    expect(res.body.mine).toEqual({ id: latest.id, status: 'proposed' });
+  });
+
+  // match.feature — "La card ya tiene un intercambio aceptado con otra persona"
+  it('marca la card como no disponible si tiene un intercambio aceptado o no está activa', async () => {
+    const author = await createUser(AUTHOR_UID);
+    const other = await createUser('uid-otra');
+    await createUser(PROPOSER_UID);
+    const taken = await createCard(author.id);
+    await prisma.exchange.create({
+      data: { cardId: taken.id, proposerId: other.id, receiverId: author.id, hours: taken.hours, status: 'accepted' },
+    });
+    const completed = await createCard(author.id, { status: 'completed' });
+
+    for (const card of [taken, completed]) {
+      const res = await getCardState(PROPOSER_UID, card.id);
+      expect(res.body).toEqual({ mine: null, cardAvailable: false });
+    }
+  });
+
+  it('devuelve 404 si la card no existe o está borrada', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID);
+    const deleted = await createCard(author.id, { status: 'deleted' });
+
+    const res = await getCardState(PROPOSER_UID, deleted.id);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Card not found' });
+  });
+
+  it('devuelve 404 si la usuaria no está registrada', async () => {
+    const author = await createUser(AUTHOR_UID);
+    const card = await createCard(author.id);
+
+    const res = await getCardState('uid-sin-registro', card.id);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Usuario no registrado' });
   });
 });

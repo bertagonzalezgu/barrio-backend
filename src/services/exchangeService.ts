@@ -74,3 +74,31 @@ export async function createExchange(firebaseUid: string, { cardId }: CreateExch
     return { ok: true, exchange };
   });
 }
+
+export interface CardExchangeState {
+  mine: { id: string; status: ExchangeStatus } | null;
+  cardAvailable: boolean;
+}
+
+type CardExchangeStateResult =
+  | { ok: true; state: CardExchangeState }
+  | { ok: false; reason: 'user-not-found' | 'card-not-found' };
+
+// Para la autora `mine` siempre es null: no puede ser proponente de su propia card.
+export async function getMyExchangeOnCard(firebaseUid: string, cardId: string): Promise<CardExchangeStateResult> {
+  const userId = await findUserId(firebaseUid);
+  if (!userId) return { ok: false, reason: 'user-not-found' };
+
+  const card = await prisma.card.findUnique({ where: { id: cardId, status: { not: 'deleted' } }, select: { status: true } });
+  if (!card) return { ok: false, reason: 'card-not-found' };
+
+  const [mine, taken] = await Promise.all([
+    prisma.exchange.findFirst({
+      where: { cardId, proposerId: userId },
+      orderBy: { proposedAt: 'desc' },
+      select: { id: true, status: true },
+    }),
+    isCardTaken(prisma, cardId),
+  ]);
+  return { ok: true, state: { mine, cardAvailable: card.status === 'active' && !taken } };
+}

@@ -1,5 +1,10 @@
 import type { Request, Response } from 'express';
-import { createExchange, parseCreateExchangeInput, type ExchangeFailure } from '../services/exchangeService';
+import {
+  createExchange,
+  getMyExchangeOnCard,
+  parseCreateExchangeInput,
+  type ExchangeFailure,
+} from '../services/exchangeService';
 
 const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }> = {
   'user-not-found': { status: 404, error: 'Usuario no registrado' },
@@ -34,4 +39,19 @@ export async function postExchange(req: Request, res: Response): Promise<void> {
   }
 
   res.status(201).json(result.exchange);
+}
+
+export async function getCardExchangeState(req: Request<{ cardId: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await getMyExchangeOnCard(req.user.uid, req.params.cardId);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.state);
 }
