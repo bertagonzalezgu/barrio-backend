@@ -408,3 +408,89 @@ describe('PATCH /api/exchanges/:id/accept', () => {
     expect(await getBalance(AUTHOR_UID)).toEqual({ balance: 2, reserved: 0, available: 2 });
   });
 });
+
+describe('PATCH /api/exchanges/:id/reject', () => {
+  it('la receptora rechaza una propuesta y se guarda rejectedAt', async () => {
+    const { exchange } = await setupProposal('request');
+
+    const res = await transition(AUTHOR_UID, exchange.id, 'reject');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: 'rejected', rejectedAt: expect.any(String) });
+  });
+
+  it('devuelve 403 si quien rechaza es la proponente', async () => {
+    const { exchange } = await setupProposal('request');
+
+    expect((await transition(PROPOSER_UID, exchange.id, 'reject')).status).toBe(403);
+  });
+
+  it('devuelve 404 si no participo en el intercambio', async () => {
+    const { exchange } = await setupProposal('request');
+    await createUser('uid-ajena');
+
+    expect((await transition('uid-ajena', exchange.id, 'reject')).status).toBe(404);
+  });
+
+  it('devuelve 409 invalid_transition si la propuesta ya estaba aceptada', async () => {
+    const { exchange } = await setupProposal('request');
+    await transition(AUTHOR_UID, exchange.id, 'accept');
+
+    const res = await transition(AUTHOR_UID, exchange.id, 'reject');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'invalid_transition' });
+  });
+});
+
+describe('PATCH /api/exchanges/:id/cancel', () => {
+  it.each([AUTHOR_UID, PROPOSER_UID])('cualquiera de las dos partes puede cancelar una propuesta (%s)', async (uid) => {
+    const { exchange } = await setupProposal('request');
+
+    const res = await transition(uid, exchange.id, 'cancel');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: 'cancelled', cancelledAt: expect.any(String) });
+  });
+
+  it.each([
+    ['offer', PROPOSER_UID],
+    ['request', AUTHOR_UID],
+  ] as const)('cancelar un intercambio aceptado en una card %s libera las horas reservadas de la pagadora', async (type, payerUid) => {
+    const { exchange } = await setupProposal(type);
+    await transition(AUTHOR_UID, exchange.id, 'accept');
+    expect((await getBalance(payerUid))?.reserved).toBe(3);
+
+    const res = await transition(PROPOSER_UID, exchange.id, 'cancel');
+
+    expect(res.status).toBe(200);
+    expect(await getBalance(payerUid)).toEqual({ balance: 5, reserved: 0, available: 5 });
+  });
+
+  it('tras cancelar el intercambio aceptado la card vuelve a estar disponible', async () => {
+    const { card, exchange } = await setupProposal('request');
+    await transition(AUTHOR_UID, exchange.id, 'accept');
+    await transition(AUTHOR_UID, exchange.id, 'cancel');
+
+    const res = await getCardState(PROPOSER_UID, card.id);
+
+    expect(res.body).toEqual({ mine: { id: exchange.id, status: 'cancelled' }, cardAvailable: true });
+  });
+
+  it('devuelve 404 si no participo en el intercambio', async () => {
+    const { exchange } = await setupProposal('request');
+    await createUser('uid-ajena');
+
+    expect((await transition('uid-ajena', exchange.id, 'cancel')).status).toBe(404);
+  });
+
+  it.each(['done', 'rejected', 'cancelled'] as const)('devuelve 409 invalid_transition si el intercambio está %s', async (status) => {
+    const { exchange } = await setupProposal('request');
+    await prisma.exchange.update({ where: { id: exchange.id }, data: { status } });
+
+    const res = await transition(PROPOSER_UID, exchange.id, 'cancel');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'invalid_transition' });
+  });
+});

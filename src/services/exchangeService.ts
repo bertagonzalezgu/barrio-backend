@@ -120,6 +120,13 @@ interface TransitionRule {
 
 const TRANSITIONS = {
   accept: { actor: 'receiver', from: ['proposed'], data: () => ({ status: 'accepted', acceptedAt: new Date() }) },
+  reject: { actor: 'receiver', from: ['proposed'], data: () => ({ status: 'rejected', rejectedAt: new Date() }) },
+  // done no se cancela aquí: a partir de ahí entra el flujo de confirmación de la tarjeta 13.
+  cancel: {
+    actor: 'participant',
+    from: ['proposed', 'accepted'],
+    data: () => ({ status: 'cancelled', cancelledAt: new Date() }),
+  },
 } satisfies Record<string, TransitionRule>;
 
 export type ExchangeAction = keyof typeof TRANSITIONS;
