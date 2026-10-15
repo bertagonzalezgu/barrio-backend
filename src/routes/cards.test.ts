@@ -189,13 +189,13 @@ describe('POST /api/cards', () => {
   });
 
   // Segundo paso de moderación: el texto final puede haberse editado tras generarlo con IA
-  it('modera la descripción final antes de guardar', async () => {
+  it('modera el título y la descripción finales juntos antes de guardar', async () => {
     await createAuthor();
 
     await postCardAs(requiredFields);
 
     const [[params]] = mockGroqCreate.mock.calls;
-    expect(params.messages.at(-1).content).toBe(requiredFields.description);
+    expect(params.messages.at(-1).content).toBe(`${requiredFields.title} ${requiredFields.description}`);
   });
 
   it('devuelve 422 content_rejected si la descripción no pasa la moderación y no guarda la card', async () => {
@@ -598,13 +598,51 @@ describe('PATCH /api/cards/:id', () => {
     expect(res.body).toEqual({ error: 'Indica la duración en días junto con la fecha de inicio' });
   });
 
-  it('modera la nueva descripción antes de guardar', async () => {
+  it('modera la nueva descripción junto al título guardado', async () => {
     const card = await seedCard();
 
     await patchCardAs(AUTHOR_UID, card.id, { description: 'Riego y abono tus plantas' });
 
     const [[params]] = mockGroqCreate.mock.calls;
-    expect(params.messages.at(-1).content).toBe('Riego y abono tus plantas');
+    expect(params.messages.at(-1).content).toBe(`${requiredFields.title} Riego y abono tus plantas`);
+  });
+
+  it('modera el nuevo título junto a la descripción guardada', async () => {
+    const card = await seedCard();
+
+    await patchCardAs(AUTHOR_UID, card.id, { title: 'Riego plantas' });
+
+    const [[params]] = mockGroqCreate.mock.calls;
+    expect(params.messages.at(-1).content).toBe(`Riego plantas ${requiredFields.description}`);
+  });
+
+  it('no llama a la moderación si quien edita no es la autora y devuelve 403', async () => {
+    const card = await seedCard();
+
+    const res = await patchCardAs('otra-usuaria', card.id, { title: 'Riego plantas' });
+
+    expect(res.status).toBe(403);
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+
+  it('modera el título y la descripción juntos si se cambian ambos', async () => {
+    const card = await seedCard();
+
+    await patchCardAs(AUTHOR_UID, card.id, { title: 'Riego plantas', description: 'Riego y abono tus plantas' });
+
+    const [[params]] = mockGroqCreate.mock.calls;
+    expect(params.messages.at(-1).content).toBe('Riego plantas Riego y abono tus plantas');
+  });
+
+  it('devuelve 422 content_rejected si el nuevo título no pasa la moderación y no cambia la card', async () => {
+    const card = await seedCard();
+    moderationReturns({ seguro: false, motivo: 'acceso indebido a vivienda' });
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { title: 'Título problemático' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected' });
+    expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject(requiredFields);
   });
 
   it('devuelve 422 content_rejected si la nueva descripción no pasa la moderación y no cambia la card', async () => {
@@ -629,7 +667,7 @@ describe('PATCH /api/cards/:id', () => {
     expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject(requiredFields);
   });
 
-  it('no llama a la moderación si no se cambia la descripción', async () => {
+  it('no llama a la moderación si no se cambian ni el título ni la descripción', async () => {
     const card = await seedCard();
 
     await patchCardAs(AUTHOR_UID, card.id, { hours: 4 });
