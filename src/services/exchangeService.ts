@@ -1,11 +1,11 @@
 import { prisma } from '../config/prisma';
 import type { Exchange, ExchangeStatus, Prisma } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
-import { RESERVING_STATUSES } from './walletService';
+import { getBalanceByUserId, RESERVING_STATUSES } from './walletService';
 
 type Tx = Prisma.TransactionClient;
 
-export type ExchangeFailure = 'user-not-found' | 'card-not-found' | 'card-unavailable' | 'own-card' | 'already-proposed';
+export type ExchangeFailure = 'user-not-found' | 'card-not-found' | 'card-unavailable' | 'own-card' | 'already-proposed' | 'insufficient-balance';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
@@ -48,6 +48,10 @@ async function hasActiveProposal(db: Tx, cardId: string, proposerId: string): Pr
   return (await db.exchange.count({ where: { cardId, proposerId, status: { in: ACTIVE_STATUSES } } })) > 0;
 }
 
+async function canAfford(db: Tx, userId: string, hours: number): Promise<boolean> {
+  return (await getBalanceByUserId(userId, db)).available >= hours;
+}
+
 export async function createExchange(firebaseUid: string, { cardId }: CreateExchangeInput): Promise<ExchangeResult> {
   const proposerId = await findUserId(firebaseUid);
   if (!proposerId) return fail('user-not-found');
@@ -60,6 +64,9 @@ export async function createExchange(firebaseUid: string, { cardId }: CreateExch
     if (card.authorId === proposerId) return fail('own-card');
     if (await isCardTaken(tx, card.id)) return fail('card-unavailable');
     if (await hasActiveProposal(tx, card.id, proposerId)) return fail('already-proposed');
+    // En una card offer paga quien propone. Una propuesta no reserva nada, así que aquí no hace falta bloquear
+    // a la pagadora: la comprobación que manda es la de accept. En una request paga la autora y se mira al aceptar.
+    if (card.type === 'offer' && !(await canAfford(tx, proposerId, card.hours))) return fail('insufficient-balance');
 
     const exchange = await tx.exchange.create({
       data: { cardId: card.id, proposerId, receiverId: card.authorId, hours: card.hours },

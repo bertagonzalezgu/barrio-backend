@@ -166,4 +166,49 @@ describe('POST /api/exchanges', () => {
     expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
     expect(await prisma.exchange.count()).toBe(1);
   });
+
+  // wallet.feature — "Saldo insuficiente"
+  it('en una card offer no crea la propuesta si mi saldo disponible no cubre las horas', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID, 2);
+    const card = await createCard(author.id, { type: 'offer', hours: 3 });
+
+    const res = await propose(PROPOSER_UID, { cardId: card.id });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'insufficient_balance' });
+    expect(await prisma.exchange.count()).toBe(0);
+  });
+
+  // wallet.feature — "Saldo insuficiente": cuenta el disponible, no el total
+  it('en una card offer tiene en cuenta las horas que ya tengo reservadas', async () => {
+    const author = await createUser(AUTHOR_UID);
+    const proposer = await createUser(PROPOSER_UID, 5);
+    const reservedCard = await createCard(author.id, { type: 'offer', hours: 3 });
+    await prisma.exchange.create({
+      data: { cardId: reservedCard.id, proposerId: proposer.id, receiverId: author.id, hours: 3, status: 'accepted' },
+    });
+    const card = await createCard(author.id, { type: 'offer', hours: 3 });
+
+    const res = await propose(PROPOSER_UID, { cardId: card.id });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'insufficient_balance' });
+  });
+
+  it('en una card offer crea la propuesta si el saldo disponible cubre justo las horas', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID, 3);
+    const card = await createCard(author.id, { type: 'offer', hours: 3 });
+
+    expect((await propose(PROPOSER_UID, { cardId: card.id })).status).toBe(201);
+  });
+
+  it('en una card request no exige saldo a quien propone, porque paga la autora', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID, 0);
+    const card = await createCard(author.id, { type: 'request', hours: 3 });
+
+    expect((await propose(PROPOSER_UID, { cardId: card.id })).status).toBe(201);
+  });
 });
