@@ -1,11 +1,11 @@
 import { prisma } from '../config/prisma';
-import type { Exchange, Prisma } from '../generated/prisma/client';
+import type { Exchange, ExchangeStatus, Prisma } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
 import { RESERVING_STATUSES } from './walletService';
 
 type Tx = Prisma.TransactionClient;
 
-export type ExchangeFailure = 'user-not-found' | 'card-not-found' | 'card-unavailable' | 'own-card';
+export type ExchangeFailure = 'user-not-found' | 'card-not-found' | 'card-unavailable' | 'own-card' | 'already-proposed';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
@@ -41,6 +41,13 @@ async function isCardTaken(db: Tx, cardId: string): Promise<boolean> {
   return (await db.exchange.count({ where: { cardId, status: { in: RESERVING_STATUSES } } })) > 0;
 }
 
+// Tras cancelled o rejected la propuesta deja de contar y se puede volver a proponer.
+const ACTIVE_STATUSES: ExchangeStatus[] = ['proposed', ...RESERVING_STATUSES];
+
+async function hasActiveProposal(db: Tx, cardId: string, proposerId: string): Promise<boolean> {
+  return (await db.exchange.count({ where: { cardId, proposerId, status: { in: ACTIVE_STATUSES } } })) > 0;
+}
+
 export async function createExchange(firebaseUid: string, { cardId }: CreateExchangeInput): Promise<ExchangeResult> {
   const proposerId = await findUserId(firebaseUid);
   if (!proposerId) return fail('user-not-found');
@@ -52,6 +59,7 @@ export async function createExchange(firebaseUid: string, { cardId }: CreateExch
     if (card.status !== 'active') return fail('card-unavailable');
     if (card.authorId === proposerId) return fail('own-card');
     if (await isCardTaken(tx, card.id)) return fail('card-unavailable');
+    if (await hasActiveProposal(tx, card.id, proposerId)) return fail('already-proposed');
 
     const exchange = await tx.exchange.create({
       data: { cardId: card.id, proposerId, receiverId: card.authorId, hours: card.hours },

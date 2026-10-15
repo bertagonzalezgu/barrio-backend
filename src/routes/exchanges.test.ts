@@ -128,4 +128,42 @@ describe('POST /api/exchanges', () => {
     expect(res.body).toEqual({ error: 'card_unavailable' });
     expect(await prisma.exchange.count()).toBe(1);
   });
+
+  it('devuelve 409 already_proposed si ya tengo una propuesta activa sobre la card', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID);
+    const card = await createCard(author.id);
+    await propose(PROPOSER_UID, { cardId: card.id });
+
+    const res = await propose(PROPOSER_UID, { cardId: card.id });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'already_proposed' });
+    expect(await prisma.exchange.count()).toBe(1);
+  });
+
+  it.each(['cancelled', 'rejected'] as const)('permite volver a proponer tras una propuesta %s', async (status) => {
+    const author = await createUser(AUTHOR_UID);
+    const proposer = await createUser(PROPOSER_UID);
+    const card = await createCard(author.id);
+    await prisma.exchange.create({
+      data: { cardId: card.id, proposerId: proposer.id, receiverId: author.id, hours: card.hours, status },
+    });
+
+    const res = await propose(PROPOSER_UID, { cardId: card.id });
+
+    expect(res.status).toBe(201);
+    expect(await prisma.exchange.count()).toBe(2);
+  });
+
+  it('dos propuestas simultáneas de la misma persona solo crean una', async () => {
+    const author = await createUser(AUTHOR_UID);
+    await createUser(PROPOSER_UID);
+    const card = await createCard(author.id);
+
+    const results = await Promise.all([propose(PROPOSER_UID, { cardId: card.id }), propose(PROPOSER_UID, { cardId: card.id })]);
+
+    expect(results.map((r) => r.status).sort()).toEqual([201, 409]);
+    expect(await prisma.exchange.count()).toBe(1);
+  });
 });

@@ -6,6 +6,7 @@ const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }
   'card-not-found': { status: 404, error: 'Card not found' },
   'card-unavailable': { status: 409, error: 'card_unavailable' },
   'own-card': { status: 403, error: 'You cannot propose an exchange on your own card' },
+  'already-proposed': { status: 409, error: 'already_proposed' },
 };
 
 function sendFailure(res: Response, reason: ExchangeFailure): void {
