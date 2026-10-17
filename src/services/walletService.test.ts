@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { prisma } from '../config/prisma';
-import type { CardType, ExchangeStatus } from '../generated/prisma/client';
-import { grantWelcomeCredit, getBalance, getBalanceByUserId, WELCOME_CREDIT_HOURS } from './walletService';
+import type { CardType, ExchangeStatus, Prisma } from '../generated/prisma/client';
+import { CARD_TYPES } from './cardService';
+import { grantWelcomeCredit, getBalance, getBalanceByUserId, payerOf, WELCOME_CREDIT_HOURS } from './walletService';
 
 async function createUser(firebaseUid = 'uid-wallet-001') {
   return prisma.user.create({ data: { firebaseUid, name: 'Ana', email: `${firebaseUid}@barrio.local` } });
@@ -136,5 +137,89 @@ describe('walletService', () => {
 
       expect(await getBalanceByUserId(ana.id)).toEqual({ balance: 5, reserved: 2, available: 3 });
     });
+
+    // La regla de quién paga está en payerOf y también en la consulta del saldo: este test las mantiene de acuerdo.
+    it.each(CARD_TYPES)('en una card %s reserva las horas de quien indica payerOf, y no las de la otra persona', async (type) => {
+      const ana = await createUser('uid-ana');
+      const bea = await createUser('uid-bea');
+      const exchange = await createExchange(ana.id, bea.id, 2, 'accepted', type);
+      const payerId = payerOf(type, exchange);
+      const otherId = payerId === ana.id ? bea.id : ana.id;
+
+      expect((await getBalanceByUserId(payerId)).reserved).toBe(2);
+      expect((await getBalanceByUserId(otherId)).reserved).toBe(0);
+    });
+
+    // Una confirmación a la vez cambia dos cifras: crea la transferencia (sube lo que sale) y deja de reservar.
+    // Si el saldo se leyera en varias consultas y la confirmación entrase entre ellas, una vería el antes y otra el después.
+    it.each([1, 2])(
+      'una confirmación que se confirma justo antes de la consulta %i del cálculo no altera el disponible',
+      async (commitBeforeQuery) => {
+        const ana = await createUser('uid-ana');
+        const bea = await createUser('uid-bea');
+        await prisma.timeTransaction.create({ data: { type: 'transfer', toUserId: ana.id, hours: 5 } });
+        const exchange = await createExchange(ana.id, bea.id, 3, 'done');
+        const confirm = () =>
+          prisma.$transaction([
+            prisma.exchange.update({ where: { id: exchange.id }, data: { status: 'confirmed', confirmedAt: new Date() } }),
+            prisma.timeTransaction.create({
+              data: { type: 'transfer', fromUserId: ana.id, toUserId: bea.id, hours: 3, exchangeId: exchange.id },
+            }),
+          ]);
+        const db = sequentialClient(commitBeforeQuery, confirm);
+
+        const balance = await getBalanceByUserId(ana.id, db.client);
+        if (!db.committed()) await confirm();
+
+        // Antes de confirmar: saldo 5, reservado 3. Después: saldo 2, reservado 0. El disponible es 2 en los dos casos.
+        expect(balance.available).toBe(2);
+        expect(await getBalanceByUserId(ana.id)).toEqual({ balance: 2, reserved: 0, available: 2 });
+      },
+    );
   });
 });
+
+type Query = (...args: unknown[]) => Promise<unknown>;
+
+// Cliente de prueba: ejecuta las consultas una detrás de otra, en el orden en que se lanzan, y justo antes de la
+// consulta número `commitBefore` (empezando en 0) deja que otra operación se confirme. Así la carrera es determinista.
+function sequentialClient(commitBefore: number, commit: () => Promise<unknown>) {
+  let previous: Promise<unknown> = Promise.resolve();
+  let issued = 0;
+  let committed = false;
+
+  const run = (query: () => Promise<unknown>): Promise<unknown> => {
+    const index = issued++;
+    const result = previous.then(async () => {
+      if (index === commitBefore) {
+        await commit();
+        committed = true;
+      }
+      return query();
+    });
+    previous = result.catch(() => undefined);
+    return result;
+  };
+
+  const wrap = (target: object): object =>
+    new Proxy(target, {
+      get(obj, prop) {
+        const value: unknown = Reflect.get(obj, prop);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) => run(() => (value as Query).apply(obj, args));
+      },
+    });
+
+  const client = new Proxy(prisma, {
+    get(obj, prop) {
+      const value: unknown = Reflect.get(obj, prop);
+      if (prop === '$queryRaw' && typeof value === 'function') {
+        return (...args: unknown[]) => run(() => (value as Query).apply(obj, args));
+      }
+      if (prop === 'timeTransaction' || prop === 'exchange') return wrap(value as object);
+      return value;
+    },
+  }) as unknown as Prisma.TransactionClient;
+
+  return { client, committed: () => committed };
+}
