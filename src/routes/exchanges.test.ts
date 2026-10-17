@@ -644,3 +644,130 @@ describe('PATCH /api/exchanges/:id/confirm', () => {
     });
   });
 });
+
+describe('PATCH /api/exchanges/:id/confirm — segunda confirmación', () => {
+  // La autora confirma primero y la proponente completa; el orden contrario tiene su propio test.
+  async function setupDone(type: CardType, options: { hours?: number; authorHours?: number; proposerHours?: number } = {}) {
+    const setup = await setupAccepted(type, options);
+    expect((await confirm(AUTHOR_UID, setup.exchange.id)).status).toBe(200);
+    return setup;
+  }
+
+  function transfersOf(exchangeId: string) {
+    return prisma.timeTransaction.findMany({ where: { exchangeId } });
+  }
+
+  it.each([
+    ['offer', 'proposer', 'author'],
+    ['request', 'author', 'proposer'],
+  ] as const)('en una card %s pasa a confirmed y crea una única transferencia de %s a %s', async (type, payer, payee) => {
+    const setup = await setupDone(type);
+
+    const res = await confirm(PROPOSER_UID, setup.exchange.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: setup.exchange.id, status: 'confirmed', myConfirmed: true, otherConfirmed: true, actions: [] });
+    expect(await prisma.exchange.findUniqueOrThrow({ where: { id: setup.exchange.id } })).toMatchObject({
+      status: 'confirmed',
+      confirmedAt: expect.any(Date),
+      proposerConfirmedAt: expect.any(Date),
+      receiverConfirmedAt: expect.any(Date),
+    });
+    expect(await transfersOf(setup.exchange.id)).toEqual([
+      expect.objectContaining({ type: 'transfer', fromUserId: setup[payer].id, toUserId: setup[payee].id, hours: 3 }),
+    ]);
+  });
+
+  it('completa igual si la primera en confirmar fue la proponente', async () => {
+    const { exchange } = await setupAccepted('request');
+    await confirm(PROPOSER_UID, exchange.id);
+
+    const res = await confirm(AUTHOR_UID, exchange.id);
+
+    expect(res.body.status).toBe('confirmed');
+    expect(await transfersOf(exchange.id)).toHaveLength(1);
+  });
+
+  it('transfiere las horas del intercambio, no las de la card', async () => {
+    const { card, exchange } = await setupDone('request');
+    await prisma.card.update({ where: { id: card.id }, data: { hours: 7 } });
+
+    await confirm(PROPOSER_UID, exchange.id);
+
+    expect((await transfersOf(exchange.id))[0].hours).toBe(3);
+  });
+
+  it.each([
+    ['offer', PROPOSER_UID, AUTHOR_UID],
+    ['request', AUTHOR_UID, PROPOSER_UID],
+  ] as const)('en una card %s la pagadora conserva el disponible, deja de reservar y la otra persona cobra', async (type, payerUid, payeeUid) => {
+    const { exchange } = await setupDone(type);
+    expect(await getBalance(payerUid)).toEqual({ balance: 5, reserved: 3, available: 2 });
+
+    await confirm(PROPOSER_UID, exchange.id);
+
+    expect(await getBalance(payerUid)).toEqual({ balance: 2, reserved: 0, available: 2 });
+    expect(await getBalance(payeeUid)).toEqual({ balance: 8, reserved: 0, available: 8 });
+  });
+
+  it.each([
+    ['offer', { proposerHours: 3 }, PROPOSER_UID],
+    ['request', { authorHours: 3 }, AUTHOR_UID],
+  ] as const)('en una card %s, una pagadora con justo las horas del intercambio acaba en 0, nunca en negativo', async (type, hours, payerUid) => {
+    const { exchange } = await setupDone(type, { hours: 3, ...hours });
+    expect(await getBalance(payerUid)).toEqual({ balance: 3, reserved: 3, available: 0 });
+
+    await confirm(PROPOSER_UID, exchange.id);
+
+    expect(await getBalance(payerUid)).toEqual({ balance: 0, reserved: 0, available: 0 });
+  });
+
+  it.each(['completed', 'reported', 'deleted'] as const)('completa aunque la card esté %s', async (cardStatus) => {
+    const { card, exchange } = await setupDone('request');
+    await prisma.card.update({ where: { id: card.id }, data: { status: cardStatus } });
+
+    const res = await confirm(PROPOSER_UID, exchange.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('confirmed');
+    expect(await transfersOf(exchange.id)).toHaveLength(1);
+    expect((await prisma.card.findUniqueOrThrow({ where: { id: card.id } })).status).toBe(cardStatus);
+  });
+
+  it.each([AUTHOR_UID, PROPOSER_UID])('confirmar otra vez un intercambio confirmed devuelve 409 a %s y no crea filas', async (uid) => {
+    const { exchange } = await setupDone('request');
+    await confirm(PROPOSER_UID, exchange.id);
+
+    const res = await confirm(uid, exchange.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'already_confirmed' });
+    expect(await transfersOf(exchange.id)).toHaveLength(1);
+  });
+
+  it('una tercera persona recibe 404 y el intercambio no avanza', async () => {
+    const { exchange } = await setupDone('request');
+    await createUser('uid-ajena');
+
+    expect((await confirm('uid-ajena', exchange.id)).status).toBe(404);
+    expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe('done');
+    expect(await transfersOf(exchange.id)).toHaveLength(0);
+  });
+
+  // Defensa extra: con el bloqueo de la card no debería pasar nunca. Si pasa, es un fallo interno, no del usuario.
+  it('si ya existe una transferencia para el intercambio aborta con 500 y no cambia nada', async () => {
+    const { author, proposer, exchange } = await setupDone('request');
+    await prisma.timeTransaction.create({
+      data: { type: 'transfer', fromUserId: author.id, toUserId: proposer.id, hours: 3, exchangeId: exchange.id },
+    });
+    const before = await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await confirm(PROPOSER_UID, exchange.id);
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).toEqual(before);
+    expect(await transfersOf(exchange.id)).toHaveLength(1);
+  });
+});

@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma';
-import { transitionExchange } from './exchangeService';
+import { confirmExchange, transitionExchange } from './exchangeService';
 import { getBalance } from './walletService';
 
 async function createUser(firebaseUid: string, hours = 0) {
@@ -51,5 +51,48 @@ describe('exchangeService — aceptaciones simultáneas', () => {
     expect(results.filter((r) => r.ok)).toHaveLength(1);
     expect(results.find((r) => !r.ok)).toEqual({ ok: false, reason: 'insufficient-balance' });
     expect(await getBalance('uid-autora')).toEqual({ balance: 3, reserved: 3, available: 0 });
+  });
+});
+
+describe('exchangeService — confirmaciones simultáneas', () => {
+  // Cada ronda con sus propias usuarias, para repetir la carrera varias veces en el mismo test.
+  async function setupAcceptedRound(round: number) {
+    const author = await createUser(`uid-autora-${round}`, 5);
+    const proposer = await createUser(`uid-proponente-${round}`);
+    const exchange = await createRequestWithProposal(author.id, proposer.id, 3);
+    await prisma.exchange.update({ where: { id: exchange.id }, data: { status: 'accepted', acceptedAt: new Date() } });
+    return { author, proposer, exchange };
+  }
+
+  it('las dos personas confirman a la vez desde accepted: acaba confirmed con una sola transferencia', async () => {
+    for (let round = 0; round < 5; round++) {
+      const { author, proposer, exchange } = await setupAcceptedRound(round);
+
+      const results = await Promise.all([
+        confirmExchange(author.firebaseUid, exchange.id),
+        confirmExchange(proposer.firebaseUid, exchange.id),
+      ]);
+
+      expect(results.every((r) => r.ok)).toBe(true);
+      expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe('confirmed');
+      expect(await prisma.timeTransaction.count({ where: { exchangeId: exchange.id } })).toBe(1);
+      expect(await getBalance(author.firebaseUid)).toEqual({ balance: 2, reserved: 0, available: 2 });
+    }
+  });
+
+  it('la misma persona confirma dos veces a la vez: una gana, la otra recibe already-confirmed y no hay transferencia', async () => {
+    for (let round = 0; round < 5; round++) {
+      const { proposer, exchange } = await setupAcceptedRound(round);
+
+      const results = await Promise.all([
+        confirmExchange(proposer.firebaseUid, exchange.id),
+        confirmExchange(proposer.firebaseUid, exchange.id),
+      ]);
+
+      expect(results.filter((r) => r.ok)).toHaveLength(1);
+      expect(results.find((r) => !r.ok)).toEqual({ ok: false, reason: 'already-confirmed' });
+      expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe('done');
+      expect(await prisma.timeTransaction.count({ where: { exchangeId: exchange.id } })).toBe(0);
+    }
   });
 });

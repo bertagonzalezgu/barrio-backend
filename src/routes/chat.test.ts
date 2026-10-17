@@ -29,10 +29,11 @@ interface ExchangeSetup {
   type?: CardType;
   status?: ExchangeStatus;
   cardStatus?: CardStatus;
+  confirmedBy?: ('proposer' | 'receiver')[];
 }
 
 // Autora, proponente y un intercambio sobre una card de la autora; también existe una tercera usuaria registrada.
-async function setupExchange({ type = 'request', status = 'proposed', cardStatus = 'active' }: ExchangeSetup = {}) {
+async function setupExchange({ type = 'request', status = 'proposed', cardStatus = 'active', confirmedBy = [] }: ExchangeSetup = {}) {
   const author = await createUser(AUTHOR_UID);
   const proposer = await createUser(PROPOSER_UID);
   await createUser(OUTSIDER_UID);
@@ -40,7 +41,15 @@ async function setupExchange({ type = 'request', status = 'proposed', cardStatus
     data: { authorId: author.id, type, hours: 3, status: cardStatus, title: 'Regar plantas', description: 'Desc', category: 'garden' },
   });
   const exchange = await prisma.exchange.create({
-    data: { cardId: card.id, proposerId: proposer.id, receiverId: author.id, hours: 3, status },
+    data: {
+      cardId: card.id,
+      proposerId: proposer.id,
+      receiverId: author.id,
+      hours: 3,
+      status,
+      proposerConfirmedAt: confirmedBy.includes('proposer') ? new Date() : null,
+      receiverConfirmedAt: confirmedBy.includes('receiver') ? new Date() : null,
+    },
   });
   return { author, proposer, card, exchange };
 }
@@ -119,18 +128,23 @@ describe('GET /api/exchanges/:id', () => {
   });
 
   describe('actions', () => {
+    // done siempre lleva exactamente una confirmación; confirmed y rated, las dos.
     it.each([
-      ['proposed', AUTHOR_UID, ['accept', 'reject', 'cancel']],
-      ['proposed', PROPOSER_UID, ['cancel']],
-      ['accepted', AUTHOR_UID, ['cancel', 'confirm']],
-      ['accepted', PROPOSER_UID, ['cancel', 'confirm']],
-      ['done', AUTHOR_UID, []],
-      ['confirmed', PROPOSER_UID, []],
-      ['rated', AUTHOR_UID, []],
-      ['cancelled', AUTHOR_UID, []],
-      ['rejected', PROPOSER_UID, []],
-    ] as const)('en %s, %s puede %j', async (status, uid, actions) => {
-      const { exchange } = await setupExchange({ status });
+      ['proposed', [], AUTHOR_UID, ['accept', 'reject', 'cancel']],
+      ['proposed', [], PROPOSER_UID, ['cancel']],
+      ['accepted', [], AUTHOR_UID, ['cancel', 'confirm']],
+      ['accepted', [], PROPOSER_UID, ['cancel', 'confirm']],
+      ['done', ['proposer'], AUTHOR_UID, ['confirm']],
+      ['done', ['proposer'], PROPOSER_UID, []],
+      ['done', ['receiver'], AUTHOR_UID, []],
+      ['done', ['receiver'], PROPOSER_UID, ['confirm']],
+      ['confirmed', ['proposer', 'receiver'], AUTHOR_UID, []],
+      ['confirmed', ['proposer', 'receiver'], PROPOSER_UID, []],
+      ['rated', ['proposer', 'receiver'], AUTHOR_UID, []],
+      ['cancelled', [], AUTHOR_UID, []],
+      ['rejected', [], PROPOSER_UID, []],
+    ] as const)('en %s confirmado por %j, %s puede %j', async (status, confirmedBy, uid, actions) => {
+      const { exchange } = await setupExchange({ status, confirmedBy: [...confirmedBy] });
 
       const res = await getDetail(uid, exchange.id);
 
@@ -366,13 +380,29 @@ describe('privacidad del chat', () => {
 
     const res = await call(uid, exchange.id);
     expect(res.status).toBeLessThan(300);
+    expectNoContactData(res.body, emails);
+  });
 
-    const entries = collectEntries(res.body);
+  it.each([
+    ['proposer', AUTHOR_UID],
+    ['receiver', PROPOSER_UID],
+  ] as const)('PATCH /:id/confirm que completa la transferencia no expone datos de contacto (ya confirmó %s)', async (confirmed, uid) => {
+    const { author, proposer, exchange } = await setupExchange({ status: 'done', cardStatus: 'completed', confirmedBy: [confirmed] });
+
+    const res = await confirm(uid, exchange.id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('confirmed');
+    expectNoContactData(res.body, [author.email, proposer.email]);
+  });
+
+  function expectNoContactData(body: unknown, emails: string[]): void {
+    const entries = collectEntries(body);
     expect(entries.filter(({ key }) => key !== undefined && CONTACT_KEY.test(key)).map(({ path }) => path)).toEqual([]);
     expect(
       entries
         .filter(({ value }) => typeof value === 'string' && emails.some((email) => value.includes(email)))
         .map(({ path }) => path),
     ).toEqual([]);
-  });
+  }
 });

@@ -242,7 +242,7 @@ export interface ExchangeDetail {
 type ExchangeDetailResult = { ok: true; detail: ExchangeDetail } | { ok: false; reason: ExchangeFailure };
 
 // Cada persona confirma por su lado; el intercambio no se da por hecho hasta que lo dicen las dos.
-const CONFIRMABLE_STATUSES: ExchangeStatus[] = ['accepted'];
+const CONFIRMABLE_STATUSES: ExchangeStatus[] = ['accepted', 'done'];
 
 export type ChatAction = ExchangeAction | 'confirm';
 
@@ -303,6 +303,16 @@ async function buildDetail(exchangeId: string, isReceiver: boolean): Promise<Exc
   };
 }
 
+// El bloqueo de la card ya impide una segunda transferencia; esta comprobación solo vigila que siga siendo así.
+// Si salta es un fallo nuestro, no de la usuaria: se lanza para deshacer la transacción y responder 500.
+async function createTransfer(tx: Tx, exchangeId: string, fromUserId: string, parties: Parties, hours: number): Promise<void> {
+  if ((await tx.timeTransaction.count({ where: { exchangeId, type: 'transfer' } })) > 0) {
+    throw new Error(`El intercambio ${exchangeId} ya tiene una transferencia`);
+  }
+  const toUserId = fromUserId === parties.proposerId ? parties.receiverId : parties.proposerId;
+  await tx.timeTransaction.create({ data: { type: 'transfer', exchangeId, fromUserId, toUserId, hours } });
+}
+
 function myConfirmation(isReceiver: boolean, at: Date): Prisma.ExchangeUpdateInput {
   return isReceiver ? { receiverConfirmedAt: at } : { proposerConfirmedAt: at };
 }
@@ -315,20 +325,29 @@ export async function confirmExchange(firebaseUid: string, exchangeId: string): 
 
   const result = await prisma.$transaction(async (tx) => {
     // Las dos confirmaciones son del mismo intercambio, y por tanto de la misma card: su bloqueo las pone en fila
-    // y la segunda lee lo que dejó guardado la primera.
+    // y la segunda lee lo que dejó guardado la primera. lockCard bloquea la fila sea cual sea el estado de la card.
+    // No hace falta bloquear a la pagadora: aquí no se comprueba saldo y su disponible no cambia al confirmar.
     await lockCard(tx, parties.cardId);
     const exchange = await tx.exchange.findUniqueOrThrow({
       where: { id: exchangeId },
-      select: { status: true, proposerConfirmedAt: true, receiverConfirmedAt: true },
+      select: { status: true, hours: true, proposerConfirmedAt: true, receiverConfirmedAt: true, card: { select: { type: true } } },
     });
     if ((isReceiver ? exchange.receiverConfirmedAt : exchange.proposerConfirmedAt) !== null) return fail('already-confirmed');
     if (!CONFIRMABLE_STATUSES.includes(exchange.status)) return fail('invalid-transition');
 
-    // Primera confirmación: las horas siguen reservadas (done reserva) y aún no hay transferencia.
     const now = new Date();
-    await tx.exchange.update({ where: { id: exchangeId }, data: { status: 'done', doneAt: now, ...myConfirmation(isReceiver, now) } });
-    // Solo si sigue activa: una card denunciada o borrada mientras tanto conserva su estado.
-    await tx.card.updateMany({ where: { id: parties.cardId, status: 'active' }, data: { status: 'completed' } });
+    if (exchange.status === 'accepted') {
+      // Primera confirmación: las horas siguen reservadas (done reserva) y aún no hay transferencia.
+      await tx.exchange.update({ where: { id: exchangeId }, data: { status: 'done', doneAt: now, ...myConfirmation(isReceiver, now) } });
+      // Solo si sigue activa: una card denunciada o borrada mientras tanto conserva su estado.
+      await tx.card.updateMany({ where: { id: parties.cardId, status: 'active' }, data: { status: 'completed' } });
+      return { ok: true } as const;
+    }
+
+    // Segunda confirmación (done, y quien confirma no lo había hecho): la reserva desaparece al salir de done
+    // y en el mismo commit aparece la transferencia, así que el saldo nunca cuenta las horas dos veces.
+    await tx.exchange.update({ where: { id: exchangeId }, data: { status: 'confirmed', confirmedAt: now, ...myConfirmation(isReceiver, now) } });
+    await createTransfer(tx, exchangeId, payerOf(exchange.card.type, parties), parties, exchange.hours);
     return { ok: true } as const;
   });
   if (!result.ok) return result;
