@@ -14,7 +14,8 @@ export type ExchangeFailure =
   | 'insufficient-balance'
   | 'exchange-not-found'
   | 'forbidden'
-  | 'invalid-transition';
+  | 'invalid-transition'
+  | 'chat-closed';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
@@ -56,7 +57,7 @@ async function isCardAvailable(db: Tx, card: { id: string; status: CardStatus })
 }
 
 // Tras cancelled o rejected la propuesta deja de contar y se puede volver a proponer.
-const ACTIVE_STATUSES: ExchangeStatus[] = ['proposed', ...RESERVING_STATUSES];
+export const ACTIVE_STATUSES: ExchangeStatus[] = ['proposed', ...RESERVING_STATUSES];
 
 async function hasActiveProposal(db: Tx, cardId: string, proposerId: string): Promise<boolean> {
   return (await db.exchange.count({ where: { cardId, proposerId, status: { in: ACTIVE_STATUSES } } })) > 0;

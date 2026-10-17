@@ -203,3 +203,127 @@ describe('GET /api/exchanges/:id/messages', () => {
     }
   });
 });
+
+function sendMessage(uid: string, exchangeId: string, body: Record<string, unknown>) {
+  return request(app).post(`/api/exchanges/${exchangeId}/messages`).set('Authorization', `Bearer ${uid}`).send(body);
+}
+
+describe('POST /api/exchanges/:id/messages', () => {
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).post('/api/exchanges/x/messages').send({ text: 'Hola' });
+    expect(res.status).toBe(401);
+  });
+
+  // chat.feature — "Enviar y recibir mensajes dentro del chat de un intercambio"
+  it('una participante envía un mensaje, se guarda y la otra lo ve al abrir el chat', async () => {
+    const { proposer, exchange } = await setupExchange();
+
+    const res = await sendMessage(PROPOSER_UID, exchange.id, { text: '¿Te va bien el sábado a las 10?' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ id: expect.any(String), text: '¿Te va bien el sábado a las 10?', sentAt: expect.any(String), mine: true });
+    expect(await prisma.message.findUniqueOrThrow({ where: { id: res.body.id } })).toMatchObject({
+      exchangeId: exchange.id,
+      senderId: proposer.id,
+      text: '¿Te va bien el sábado a las 10?',
+    });
+
+    const list = await getMessages(AUTHOR_UID, exchange.id);
+    expect(list.body).toEqual([{ ...res.body, mine: false }]);
+  });
+
+  it('recorta los espacios del texto antes de guardarlo', async () => {
+    const { exchange } = await setupExchange();
+
+    const res = await sendMessage(AUTHOR_UID, exchange.id, { text: '   Hola   ' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.text).toBe('Hola');
+  });
+
+  it('acepta un texto de exactamente 2000 caracteres', async () => {
+    const { exchange } = await setupExchange();
+
+    const res = await sendMessage(AUTHOR_UID, exchange.id, { text: 'a'.repeat(2000) });
+
+    expect(res.status).toBe(201);
+  });
+
+  it.each(['proposed', 'accepted', 'done'] as const)('se puede escribir con el intercambio %s', async (status) => {
+    const { exchange } = await setupExchange({ status });
+
+    for (const uid of [AUTHOR_UID, PROPOSER_UID]) {
+      expect((await sendMessage(uid, exchange.id, { text: 'Hola' })).status).toBe(201);
+    }
+  });
+
+  it.each(['cancelled', 'rejected', 'confirmed', 'rated'] as const)(
+    'con el intercambio %s devuelve 409 chat_closed, no guarda nada y el chat se sigue leyendo',
+    async (status) => {
+      const { proposer, exchange } = await setupExchange({ status });
+      await prisma.message.create({ data: { exchangeId: exchange.id, senderId: proposer.id, text: 'Gracias' } });
+
+      const res = await sendMessage(AUTHOR_UID, exchange.id, { text: 'Hola' });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: 'chat_closed' });
+      expect(await prisma.message.count()).toBe(1);
+      expect((await getMessages(AUTHOR_UID, exchange.id)).body).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    ['sin text', {}],
+    ['con text que no es un texto', { text: 42 }],
+    ['con text vacío', { text: '' }],
+    ['con text de solo espacios', { text: '   \n\t ' }],
+    ['con text de más de 2000 caracteres', { text: 'a'.repeat(2001) }],
+  ])('devuelve 400 %s y no guarda nada', async (_case, body) => {
+    const { exchange } = await setupExchange();
+
+    const res = await sendMessage(AUTHOR_UID, exchange.id, body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: expect.any(String) });
+    expect(await prisma.message.count()).toBe(0);
+  });
+
+  it('comprueba el texto antes que el estado: texto inválido en un chat cerrado da 400', async () => {
+    const { exchange } = await setupExchange({ status: 'confirmed' });
+
+    const res = await sendMessage(AUTHOR_UID, exchange.id, { text: '   ' });
+
+    expect(res.status).toBe(400);
+  });
+
+  // chat.feature — "El chat solo es visible para las dos personas implicadas"
+  it('a una tercera persona le responde igual que si el intercambio no existiera, sea cual sea el estado o el texto', async () => {
+    const { exchange: open } = await setupExchange();
+    const closed = await prisma.exchange.create({
+      data: { cardId: open.cardId, proposerId: open.proposerId, receiverId: open.receiverId, hours: 3, status: 'confirmed' },
+    });
+    const missing = await sendMessage(AUTHOR_UID, MISSING_ID, { text: 'Hola' });
+
+    for (const [id, body] of [
+      [open.id, { text: 'Hola' }],
+      [open.id, { text: '' }],
+      [closed.id, { text: 'Hola' }],
+      [closed.id, { text: 'a'.repeat(2001) }],
+    ] as const) {
+      const res = await sendMessage(OUTSIDER_UID, id, body);
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual(missing.body);
+    }
+    expect(missing.status).toBe(404);
+    expect(await prisma.message.count()).toBe(0);
+  });
+
+  it('devuelve 404 si la usuaria no está registrada', async () => {
+    const { exchange } = await setupExchange();
+
+    const res = await sendMessage('uid-sin-registro', exchange.id, { text: 'Hola' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Usuario no registrado' });
+  });
+});

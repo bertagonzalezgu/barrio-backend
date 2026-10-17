@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { listMessages } from '../services/chatService';
+import { listMessages, sendMessage } from '../services/chatService';
 import {
   createExchange,
   getExchangeDetail,
@@ -20,6 +20,7 @@ const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }
   'exchange-not-found': { status: 404, error: 'Exchange not found' },
   forbidden: { status: 403, error: 'Your role in this exchange does not allow this action' },
   'invalid-transition': { status: 409, error: 'invalid_transition' },
+  'chat-closed': { status: 409, error: 'chat_closed' },
 };
 
 function sendFailure(res: Response, reason: ExchangeFailure): void {
@@ -108,4 +109,24 @@ export async function getMessages(req: Request<{ id: string }>, res: Response): 
   }
 
   res.json(result.messages);
+}
+
+// A diferencia del resto de endpoints, el body se valida después de comprobar la participación: ver sendMessage.
+export async function postMessage(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await sendMessage(req.user.uid, req.params.id, req.body);
+  if (!result.ok) {
+    if (result.reason === 'invalid') {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.status(201).json(result.message);
 }
