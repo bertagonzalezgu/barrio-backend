@@ -1,6 +1,8 @@
 import type { Request, Response } from 'express';
+import { listMessages } from '../services/chatService';
 import {
   createExchange,
+  getExchangeDetail,
   getMyExchangeOnCard,
   transitionExchange,
   type ExchangeAction,
@@ -76,4 +78,34 @@ export function patchExchange(action: ExchangeAction) {
 
     res.json(result.exchange);
   };
+}
+
+export async function getExchange(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await getExchangeDetail(req.user.uid, req.params.id);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.detail);
+}
+
+export async function getMessages(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await listMessages(req.user.uid, req.params.id);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.messages);
 }
