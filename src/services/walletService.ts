@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma';
-import type { CardType, ExchangeStatus, Prisma } from '../generated/prisma/client';
+import { Prisma, type CardType, type ExchangeStatus } from '../generated/prisma/client';
 
 export const WELCOME_CREDIT_HOURS = 2;
 
@@ -32,18 +32,20 @@ export async function grantWelcomeCredit(userId: string): Promise<boolean> {
 }
 
 // Paga quien recibe la ayuda: en una card offer es quien propone, en una request es la autora (receptora).
-// payerOf y paidBy expresan la misma regla, una para un intercambio concreto y otra como filtro de consulta.
+// Es la única fuente de la regla: payerOf la aplica a un intercambio concreto y paidBySql la convierte en filtro SQL.
+const PAYER_ROLE = { offer: 'proposer', request: 'receiver' } as const satisfies Record<CardType, 'proposer' | 'receiver'>;
+
+const PARTY_COLUMN = { proposer: Prisma.raw('e."proposerId"'), receiver: Prisma.raw('e."receiverId"') };
+
 export function payerOf(cardType: CardType, exchange: { proposerId: string; receiverId: string }): string {
-  return cardType === 'offer' ? exchange.proposerId : exchange.receiverId;
+  return PAYER_ROLE[cardType] === 'proposer' ? exchange.proposerId : exchange.receiverId;
 }
 
-function paidBy(userId: string): Prisma.ExchangeWhereInput {
-  return {
-    OR: [
-      { proposerId: userId, card: { type: 'offer' } },
-      { receiverId: userId, card: { type: 'request' } },
-    ],
-  };
+function paidBySql(userId: string): Prisma.Sql {
+  const conditions = (Object.keys(PAYER_ROLE) as CardType[]).map(
+    (type) => Prisma.sql`(c.type = ${type}::"CardType" AND ${PARTY_COLUMN[PAYER_ROLE[type]]} = ${userId})`,
+  );
+  return Prisma.join(conditions, ' OR ');
 }
 
 export async function getBalance(firebaseUid: string): Promise<Balance | null> {
@@ -52,18 +54,31 @@ export async function getBalance(firebaseUid: string): Promise<Balance | null> {
   return getBalanceByUserId(user.id);
 }
 
+// SUM de enteros en Postgres devuelve bigint: se pasa a number aquí y solo aquí. Las horas nunca rozan el límite.
+interface BalanceRow {
+  incoming: bigint;
+  outgoing: bigint;
+  reserved: bigint;
+}
+
+function toBalance(row: BalanceRow): Balance {
+  const balance = Number(row.incoming) - Number(row.outgoing);
+  const reserved = Number(row.reserved);
+  return { balance, reserved, available: balance - reserved };
+}
+
+// Una sola sentencia para que las tres cifras salgan de la misma foto de la base de datos. Con consultas separadas,
+// una confirmación (que a la vez crea la transferencia y deja de reservar) colada entre ellas inflaría el disponible.
 // Acepta un cliente de transacción para que exchangeService pueda leer el saldo con las filas ya bloqueadas.
 export async function getBalanceByUserId(userId: string, db: Prisma.TransactionClient = prisma): Promise<Balance> {
-  const [incoming, outgoing, reservedHours] = await Promise.all([
-    db.timeTransaction.aggregate({ where: { toUserId: userId, type: 'transfer' }, _sum: { hours: true } }),
-    db.timeTransaction.aggregate({ where: { fromUserId: userId, type: 'transfer' }, _sum: { hours: true } }),
-    db.exchange.aggregate({
-      where: { ...paidBy(userId), status: { in: RESERVING_STATUSES } },
-      _sum: { hours: true },
-    }),
-  ]);
-
-  const balance = (incoming._sum.hours ?? 0) - (outgoing._sum.hours ?? 0);
-  const reserved = reservedHours._sum.hours ?? 0;
-  return { balance, reserved, available: balance - reserved };
+  const reservingStatuses = Prisma.join(RESERVING_STATUSES.map((status) => Prisma.sql`${status}::"ExchangeStatus"`));
+  const [row] = await db.$queryRaw<BalanceRow[]>`
+    SELECT
+      (SELECT COALESCE(SUM(hours), 0) FROM "TimeTransaction" WHERE "toUserId" = ${userId} AND type = 'transfer') AS incoming,
+      (SELECT COALESCE(SUM(hours), 0) FROM "TimeTransaction" WHERE "fromUserId" = ${userId} AND type = 'transfer') AS outgoing,
+      (SELECT COALESCE(SUM(e.hours), 0)
+         FROM "Exchange" e JOIN "Card" c ON c.id = e."cardId"
+        WHERE e.status IN (${reservingStatuses}) AND (${paidBySql(userId)})) AS reserved
+  `;
+  return toBalance(row);
 }

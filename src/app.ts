@@ -4,6 +4,7 @@ import walletRoutes from './routes/wallet';
 import userRoutes from './routes/users';
 import cardRoutes from './routes/cards';
 import exchangeRoutes from './routes/exchanges';
+import { errorHandler } from './middleware/errorHandler';
 
 // La app se exporta sin arrancar el servidor para poder testearla con supertest.
 const app = express();
@@ -15,5 +16,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/cards', cardRoutes);
 app.use('/api/exchanges', exchangeRoutes);
+
+app.use(errorHandler);
 
 export default app;

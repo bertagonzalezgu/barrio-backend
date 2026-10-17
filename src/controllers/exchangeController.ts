@@ -1,6 +1,9 @@
 import type { Request, Response } from 'express';
+import { listMessages, reportConversation, sendMessage } from '../services/chatService';
 import {
+  confirmExchange,
   createExchange,
+  getExchangeDetail,
   getMyExchangeOnCard,
   transitionExchange,
   type ExchangeAction,
@@ -18,6 +21,8 @@ const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }
   'exchange-not-found': { status: 404, error: 'Exchange not found' },
   forbidden: { status: 403, error: 'Your role in this exchange does not allow this action' },
   'invalid-transition': { status: 409, error: 'invalid_transition' },
+  'chat-closed': { status: 409, error: 'chat_closed' },
+  'already-confirmed': { status: 409, error: 'already_confirmed' },
 };
 
 function sendFailure(res: Response, reason: ExchangeFailure): void {
@@ -76,4 +81,89 @@ export function patchExchange(action: ExchangeAction) {
 
     res.json(result.exchange);
   };
+}
+
+export async function getExchange(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await getExchangeDetail(req.user.uid, req.params.id);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.detail);
+}
+
+export async function getMessages(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await listMessages(req.user.uid, req.params.id);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.messages);
+}
+
+// A diferencia del resto de endpoints, el body se valida después de comprobar la participación: ver sendMessage.
+export async function postMessage(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await sendMessage(req.user.uid, req.params.id, req.body);
+  if (!result.ok) {
+    if (result.reason === 'invalid') {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.status(201).json(result.message);
+}
+
+export async function patchConfirm(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await confirmExchange(req.user.uid, req.params.id);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.detail);
+}
+
+// Como postMessage: el body se valida después de comprobar la participación.
+export async function postReport(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await reportConversation(req.user.uid, req.params.id, req.body);
+  if (!result.ok) {
+    if (result.reason === 'invalid') {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.status(201).json(result.report);
 }

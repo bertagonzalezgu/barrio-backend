@@ -14,7 +14,9 @@ export type ExchangeFailure =
   | 'insufficient-balance'
   | 'exchange-not-found'
   | 'forbidden'
-  | 'invalid-transition';
+  | 'invalid-transition'
+  | 'chat-closed'
+  | 'already-confirmed';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
@@ -50,8 +52,13 @@ async function isCardTaken(db: Tx, cardId: string): Promise<boolean> {
   return (await db.exchange.count({ where: { cardId, status: { in: RESERVING_STATUSES } } })) > 0;
 }
 
+// Se puede aceptar una propuesta sobre la card solo si sigue activa y nadie la tiene cogida.
+async function isCardAvailable(db: Tx, card: { id: string; status: CardStatus }): Promise<boolean> {
+  return card.status === 'active' && !(await isCardTaken(db, card.id));
+}
+
 // Tras cancelled o rejected la propuesta deja de contar y se puede volver a proponer.
-const ACTIVE_STATUSES: ExchangeStatus[] = ['proposed', ...RESERVING_STATUSES];
+export const ACTIVE_STATUSES: ExchangeStatus[] = ['proposed', ...RESERVING_STATUSES];
 
 async function hasActiveProposal(db: Tx, cardId: string, proposerId: string): Promise<boolean> {
   return (await db.exchange.count({ where: { cardId, proposerId, status: { in: ACTIVE_STATUSES } } })) > 0;
@@ -98,18 +105,21 @@ export async function getMyExchangeOnCard(firebaseUid: string, cardId: string): 
   const userId = await findUserId(firebaseUid);
   if (!userId) return { ok: false, reason: 'user-not-found' };
 
-  const card = await prisma.card.findUnique({ where: { id: cardId, status: { not: 'deleted' } }, select: { status: true } });
+  const card = await prisma.card.findUnique({
+    where: { id: cardId, status: { not: 'deleted' } },
+    select: { id: true, status: true },
+  });
   if (!card) return { ok: false, reason: 'card-not-found' };
 
-  const [mine, taken] = await Promise.all([
+  const [mine, cardAvailable] = await Promise.all([
     prisma.exchange.findFirst({
       where: { cardId, proposerId: userId },
       orderBy: { proposedAt: 'desc' },
       select: { id: true, status: true },
     }),
-    isCardTaken(prisma, cardId),
+    isCardAvailable(prisma, card),
   ]);
-  return { ok: true, state: { mine, cardAvailable: card.status === 'active' && !taken } };
+  return { ok: true, state: { mine, cardAvailable } };
 }
 
 interface TransitionRule {
@@ -131,6 +141,38 @@ const TRANSITIONS = {
 
 export type ExchangeAction = keyof typeof TRANSITIONS;
 
+const EXCHANGE_ACTIONS = Object.keys(TRANSITIONS) as ExchangeAction[];
+
+function canAct(rule: TransitionRule, isReceiver: boolean): boolean {
+  return rule.actor === 'participant' || isReceiver;
+}
+
+interface Parties {
+  cardId: string;
+  proposerId: string;
+  receiverId: string;
+}
+
+export type ParticipationResult =
+  | { ok: true; userId: string; parties: Parties }
+  | { ok: false; reason: 'user-not-found' | 'exchange-not-found' };
+
+// Participantes y card no cambian nunca, así que se pueden leer sin bloqueo antes de cualquier transacción.
+export async function findParticipation(firebaseUid: string, exchangeId: string): Promise<ParticipationResult> {
+  const userId = await findUserId(firebaseUid);
+  if (!userId) return { ok: false, reason: 'user-not-found' };
+
+  const parties = await prisma.exchange.findUnique({
+    where: { id: exchangeId },
+    select: { cardId: true, proposerId: true, receiverId: true },
+  });
+  // A quien no participa no le decimos que el intercambio existe.
+  if (!parties || (parties.proposerId !== userId && parties.receiverId !== userId)) {
+    return { ok: false, reason: 'exchange-not-found' };
+  }
+  return { ok: true, userId, parties };
+}
+
 // Mismo orden de bloqueo en todas las operaciones (card y después usuaria pagadora) para no provocar interbloqueos.
 async function lockUser(tx: Tx, userId: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
@@ -146,7 +188,7 @@ interface ExchangeToAccept {
 
 // Bloquear a la pagadora serializa sus aceptaciones aunque sean de cards distintas: la segunda ve la reserva de la primera.
 async function acceptBlocker(tx: Tx, exchange: ExchangeToAccept): Promise<ExchangeFailure | null> {
-  if (exchange.card.status !== 'active' || (await isCardTaken(tx, exchange.cardId))) return 'card-unavailable';
+  if (!(await isCardAvailable(tx, { id: exchange.cardId, status: exchange.card.status }))) return 'card-unavailable';
   const payerId = payerOf(exchange.card.type, exchange);
   await lockUser(tx, payerId);
   return (await canAfford(tx, payerId, exchange.hours)) ? null : 'insufficient-balance';
@@ -160,16 +202,10 @@ export async function transitionExchange(
   action: ExchangeAction,
 ): Promise<ExchangeResult> {
   const rule: TransitionRule = TRANSITIONS[action];
-  const userId = await findUserId(firebaseUid);
-  if (!userId) return fail('user-not-found');
-
-  const parties = await prisma.exchange.findUnique({
-    where: { id: exchangeId },
-    select: { cardId: true, proposerId: true, receiverId: true },
-  });
-  // A quien no participa no le decimos que el intercambio existe.
-  if (!parties || (parties.proposerId !== userId && parties.receiverId !== userId)) return fail('exchange-not-found');
-  if (rule.actor === 'receiver' && parties.receiverId !== userId) return fail('forbidden');
+  const participation = await findParticipation(firebaseUid, exchangeId);
+  if (!participation.ok) return participation;
+  const { userId, parties } = participation;
+  if (!canAct(rule, parties.receiverId === userId)) return fail('forbidden');
 
   return prisma.$transaction(async (tx) => {
     await lockCard(tx, parties.cardId);
@@ -187,4 +223,134 @@ export async function transitionExchange(
     const updated = await tx.exchange.update({ where: { id: exchangeId }, data: rule.data() });
     return { ok: true, exchange: updated };
   });
+}
+
+// Select explícito: de la otra persona solo sale lo que el chat necesita pintar, nunca su email.
+const PARTICIPANT_SELECT = { id: true, name: true, avatar: true } as const;
+
+export interface ExchangeDetail {
+  id: string;
+  status: ExchangeStatus;
+  hours: number;
+  card: { id: string; title: string; type: CardType };
+  other: { id: string; name: string; avatar: string };
+  myConfirmed: boolean;
+  otherConfirmed: boolean;
+  actions: ChatAction[];
+}
+
+type ExchangeDetailResult = { ok: true; detail: ExchangeDetail } | { ok: false; reason: ExchangeFailure };
+
+// Cada persona confirma por su lado; el intercambio no se da por hecho hasta que lo dicen las dos.
+const CONFIRMABLE_STATUSES: ExchangeStatus[] = ['accepted', 'done'];
+
+export type ChatAction = ExchangeAction | 'confirm';
+
+// Las acciones salen de la misma tabla TRANSITIONS que aplica transitionExchange, para que el frontend no repita reglas.
+// accept solo se ofrece si de verdad podría salir bien: la card sigue libre. El saldo se comprueba al aceptar.
+async function availableActions(
+  status: ExchangeStatus,
+  isReceiver: boolean,
+  myConfirmed: boolean,
+  card: { id: string; status: CardStatus },
+): Promise<ChatAction[]> {
+  const actions: ChatAction[] = EXCHANGE_ACTIONS.filter((action) => {
+    const rule: TransitionRule = TRANSITIONS[action];
+    return rule.from.includes(status) && canAct(rule, isReceiver);
+  });
+  if (CONFIRMABLE_STATUSES.includes(status) && !myConfirmed) actions.push('confirm');
+  if (actions.includes('accept') && !(await isCardAvailable(prisma, card))) {
+    return actions.filter((action) => action !== 'accept');
+  }
+  return actions;
+}
+
+export async function getExchangeDetail(firebaseUid: string, exchangeId: string): Promise<ExchangeDetailResult> {
+  const participation = await findParticipation(firebaseUid, exchangeId);
+  if (!participation.ok) return participation;
+  return { ok: true, detail: await buildDetail(exchangeId, participation.parties.receiverId === participation.userId) };
+}
+
+async function buildDetail(exchangeId: string, isReceiver: boolean): Promise<ExchangeDetail> {
+  const exchange = await prisma.exchange.findUniqueOrThrow({
+    where: { id: exchangeId },
+    select: {
+      id: true,
+      status: true,
+      hours: true,
+      proposerConfirmedAt: true,
+      receiverConfirmedAt: true,
+      card: { select: { id: true, title: true, type: true, status: true } },
+      proposer: { select: PARTICIPANT_SELECT },
+      receiver: { select: PARTICIPANT_SELECT },
+    },
+  });
+
+  const { status: cardStatus, ...card } = exchange.card;
+  const [myConfirmedAt, otherConfirmedAt] = isReceiver
+    ? [exchange.receiverConfirmedAt, exchange.proposerConfirmedAt]
+    : [exchange.proposerConfirmedAt, exchange.receiverConfirmedAt];
+
+  return {
+    id: exchange.id,
+    status: exchange.status,
+    hours: exchange.hours,
+    card,
+    other: isReceiver ? exchange.proposer : exchange.receiver,
+    myConfirmed: myConfirmedAt !== null,
+    otherConfirmed: otherConfirmedAt !== null,
+    actions: await availableActions(exchange.status, isReceiver, myConfirmedAt !== null, { id: card.id, status: cardStatus }),
+  };
+}
+
+// El bloqueo de la card ya impide una segunda transferencia; esta comprobación solo vigila que siga siendo así.
+// Si salta es un fallo nuestro, no de la usuaria: se lanza para deshacer la transacción y responder 500.
+async function createTransfer(tx: Tx, exchangeId: string, fromUserId: string, parties: Parties, hours: number): Promise<void> {
+  if ((await tx.timeTransaction.count({ where: { exchangeId, type: 'transfer' } })) > 0) {
+    throw new Error(`El intercambio ${exchangeId} ya tiene una transferencia`);
+  }
+  const toUserId = fromUserId === parties.proposerId ? parties.receiverId : parties.proposerId;
+  await tx.timeTransaction.create({ data: { type: 'transfer', exchangeId, fromUserId, toUserId, hours } });
+}
+
+function myConfirmation(isReceiver: boolean, at: Date): Prisma.ExchangeUpdateInput {
+  return isReceiver ? { receiverConfirmedAt: at } : { proposerConfirmedAt: at };
+}
+
+export async function confirmExchange(firebaseUid: string, exchangeId: string): Promise<ExchangeDetailResult> {
+  const participation = await findParticipation(firebaseUid, exchangeId);
+  if (!participation.ok) return participation;
+  const { userId, parties } = participation;
+  const isReceiver = parties.receiverId === userId;
+
+  const result = await prisma.$transaction(async (tx) => {
+    // Las dos confirmaciones son del mismo intercambio, y por tanto de la misma card: su bloqueo las pone en fila
+    // y la segunda lee lo que dejó guardado la primera. lockCard bloquea la fila sea cual sea el estado de la card.
+    // No hace falta bloquear a la pagadora: aquí no se comprueba saldo y su disponible no cambia al confirmar.
+    await lockCard(tx, parties.cardId);
+    const exchange = await tx.exchange.findUniqueOrThrow({
+      where: { id: exchangeId },
+      select: { status: true, hours: true, proposerConfirmedAt: true, receiverConfirmedAt: true, card: { select: { type: true } } },
+    });
+    if ((isReceiver ? exchange.receiverConfirmedAt : exchange.proposerConfirmedAt) !== null) return fail('already-confirmed');
+    if (!CONFIRMABLE_STATUSES.includes(exchange.status)) return fail('invalid-transition');
+
+    const now = new Date();
+    if (exchange.status === 'accepted') {
+      // Primera confirmación: las horas siguen reservadas (done reserva) y aún no hay transferencia.
+      await tx.exchange.update({ where: { id: exchangeId }, data: { status: 'done', doneAt: now, ...myConfirmation(isReceiver, now) } });
+      // Solo si sigue activa: una card denunciada o borrada mientras tanto conserva su estado.
+      await tx.card.updateMany({ where: { id: parties.cardId, status: 'active' }, data: { status: 'completed' } });
+      return { ok: true } as const;
+    }
+
+    // Segunda confirmación (done, y quien confirma no lo había hecho): la reserva desaparece al salir de done
+    // y en el mismo commit aparece la transferencia, así que el saldo nunca cuenta las horas dos veces.
+    await tx.exchange.update({ where: { id: exchangeId }, data: { status: 'confirmed', confirmedAt: now, ...myConfirmation(isReceiver, now) } });
+    await createTransfer(tx, exchangeId, payerOf(exchange.card.type, parties), parties, exchange.hours);
+    return { ok: true } as const;
+  });
+  if (!result.ok) return result;
+
+  return { ok: true, detail: await buildDetail(exchangeId, isReceiver) };
 }

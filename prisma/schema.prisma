@@ -133,6 +133,7 @@ model Exchange {
 
   transactions TimeTransaction[]
   messages     Message[]
+  reports      Report[]
 
   @@index([cardId])
   @@index([proposerId, status])
@@ -162,6 +163,8 @@ model Report {
   reporter       User         @relation("ReportReporter", fields: [reporterId], references: [id])
   cardId         String?
   card           Card?        @relation(fields: [cardId], references: [id])
+  exchangeId     String?
+  exchange       Exchange?    @relation(fields: [exchangeId], references: [id])
   reportedUserId String?
   reportedUser   User?        @relation("ReportedUser", fields: [reportedUserId], references: [id])
   reason         String       @db.VarChar(1000)
@@ -170,6 +173,7 @@ model Report {
   reviewedAt     DateTime?
 
   @@index([cardId])
+  @@index([exchangeId])
   @@index([reportedUserId, status])
 }
 
