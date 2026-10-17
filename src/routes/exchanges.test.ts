@@ -745,6 +745,20 @@ describe('PATCH /api/exchanges/:id/confirm — segunda confirmación', () => {
     expect(await transfersOf(exchange.id)).toHaveLength(1);
   });
 
+  // Decisión consciente: en confirmed y rated las dos ya confirmaron, así que gana already_confirmed sobre invalid_transition.
+  it.each([AUTHOR_UID, PROPOSER_UID])('confirmar un intercambio rated devuelve 409 already_confirmed a %s y no crea filas', async (uid) => {
+    const { exchange } = await setupDone('request');
+    await confirm(PROPOSER_UID, exchange.id);
+    await prisma.exchange.update({ where: { id: exchange.id }, data: { status: 'rated', ratedAt: new Date() } });
+
+    const res = await confirm(uid, exchange.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'already_confirmed' });
+    expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe('rated');
+    expect(await transfersOf(exchange.id)).toHaveLength(1);
+  });
+
   it('una tercera persona recibe 404 y el intercambio no avanza', async () => {
     const { exchange } = await setupDone('request');
     await createUser('uid-ajena');
