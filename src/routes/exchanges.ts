@@ -8,6 +8,7 @@ import {
   patchExchange,
   postExchange,
   postMessage,
+  postReport,
 } from '../controllers/exchangeController';
 
 const router = Router();
@@ -21,5 +22,6 @@ router.patch('/:id/accept', verifyToken, patchExchange('accept'));
 router.patch('/:id/reject', verifyToken, patchExchange('reject'));
 router.patch('/:id/cancel', verifyToken, patchExchange('cancel'));
 router.patch('/:id/confirm', verifyToken, patchConfirm);
+router.post('/:id/report', verifyToken, postReport);
 
 export default router;

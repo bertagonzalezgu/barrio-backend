@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { listMessages, sendMessage } from '../services/chatService';
+import { listMessages, reportConversation, sendMessage } from '../services/chatService';
 import {
   confirmExchange,
   createExchange,
@@ -146,4 +146,24 @@ export async function patchConfirm(req: Request<{ id: string }>, res: Response):
   }
 
   res.json(result.detail);
+}
+
+// Como postMessage: el body se valida después de comprobar la participación.
+export async function postReport(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await reportConversation(req.user.uid, req.params.id, req.body);
+  if (!result.ok) {
+    if (result.reason === 'invalid') {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.status(201).json(result.report);
 }

@@ -13,6 +13,7 @@ export interface ChatMessage {
 type ChatFailure = { ok: false; reason: ExchangeFailure };
 
 const MESSAGE_MAX_LENGTH = 2000;
+const REPORT_REASON_MAX_LENGTH = 1000;
 
 // Se escribe mientras el intercambio sigue vivo; cerrado (cancelled, rejected, confirmed, rated) queda solo en lectura.
 const WRITABLE_STATUSES: ExchangeStatus[] = ACTIVE_STATUSES;
@@ -36,18 +37,21 @@ export async function listMessages(
   };
 }
 
-function parseMessageText(body: unknown): ParseResult<string> {
-  const text = typeof body === 'object' && body !== null ? (body as Record<string, unknown>).text : undefined;
-  if (typeof text !== 'string' || text.trim() === '') {
-    return { ok: false, error: 'text es obligatorio y debe ser un texto' };
+// Texto obligatorio, recortado; solo espacios cuenta como vacío.
+function parseRequiredText(body: unknown, field: string, maxLength: number): ParseResult<string> {
+  const value = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)[field] : undefined;
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { ok: false, error: `${field} es obligatorio y debe ser un texto` };
   }
-  if (text.trim().length > MESSAGE_MAX_LENGTH) {
-    return { ok: false, error: `text debe tener ${MESSAGE_MAX_LENGTH} caracteres como máximo` };
+  if (value.trim().length > maxLength) {
+    return { ok: false, error: `${field} debe tener ${maxLength} caracteres como máximo` };
   }
-  return { ok: true, data: text.trim() };
+  return { ok: true, data: value.trim() };
 }
 
-type SendMessageResult = { ok: true; message: ChatMessage } | ChatFailure | { ok: false; reason: 'invalid'; error: string };
+type InvalidInput = { ok: false; reason: 'invalid'; error: string };
+
+type SendMessageResult = { ok: true; message: ChatMessage } | ChatFailure | InvalidInput;
 
 // Orden: no participas (404) antes que texto inválido (400) antes que chat cerrado (409),
 // para que una tercera persona no pueda deducir nada del intercambio por la respuesta.
@@ -55,7 +59,7 @@ export async function sendMessage(firebaseUid: string, exchangeId: string, body:
   const participation = await findParticipation(firebaseUid, exchangeId);
   if (!participation.ok) return participation;
 
-  const text = parseMessageText(body);
+  const text = parseRequiredText(body, 'text', MESSAGE_MAX_LENGTH);
   if (!text.ok) return { ok: false, reason: 'invalid', error: text.error };
 
   return prisma.$transaction(async (tx) => {
@@ -72,4 +76,29 @@ export async function sendMessage(firebaseUid: string, exchangeId: string, body:
     });
     return { ok: true, message: { ...message, mine: true } } as const;
   });
+}
+
+type ReportResult = { ok: true; report: { id: string; createdAt: Date } } | ChatFailure | InvalidInput;
+
+// Se puede denunciar en cualquier estado y no cambia nada más: ni el intercambio, ni la card, ni el chat.
+// cardId queda null a propósito: una denuncia de card oculta la card, y esta no debe confundirse con ella.
+export async function reportConversation(firebaseUid: string, exchangeId: string, body: unknown): Promise<ReportResult> {
+  const participation = await findParticipation(firebaseUid, exchangeId);
+  if (!participation.ok) return participation;
+
+  const reason = parseRequiredText(body, 'reason', REPORT_REASON_MAX_LENGTH);
+  if (!reason.ok) return { ok: false, reason: 'invalid', error: reason.error };
+
+  const { userId, parties } = participation;
+  const report = await prisma.report.create({
+    data: {
+      exchangeId,
+      reporterId: userId,
+      reportedUserId: userId === parties.proposerId ? parties.receiverId : parties.proposerId,
+      reason: reason.data,
+    },
+    // Respuesta mínima: ni el motivo ni nada de la persona denunciada.
+    select: { id: true, createdAt: true },
+  });
+  return { ok: true, report };
 }

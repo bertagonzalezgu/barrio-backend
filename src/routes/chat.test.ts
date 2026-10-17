@@ -346,6 +346,130 @@ describe('POST /api/exchanges/:id/messages', () => {
   });
 });
 
+function report(uid: string, exchangeId: string, body: Record<string, unknown>) {
+  return request(app).post(`/api/exchanges/${exchangeId}/report`).set('Authorization', `Bearer ${uid}`).send(body);
+}
+
+// chat.feature — "Denunciar una conversación"
+describe('POST /api/exchanges/:id/report', () => {
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).post('/api/exchanges/x/report').send({ reason: 'Spam' });
+    expect(res.status).toBe(401);
+  });
+
+  it.each(ALL_STATUSES)('con el intercambio %s registra la denuncia contra la otra persona y responde solo id y fecha', async (status) => {
+    const { author, proposer, exchange } = await setupExchange({ status });
+
+    const res = await report(PROPOSER_UID, exchange.id, { reason: '  Me pide el teléfono  ' });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ id: expect.any(String), createdAt: expect.any(String) });
+    expect(await prisma.report.findUniqueOrThrow({ where: { id: res.body.id } })).toMatchObject({
+      exchangeId: exchange.id,
+      reporterId: proposer.id,
+      reportedUserId: author.id,
+      reason: 'Me pide el teléfono',
+      status: 'pending',
+      cardId: null,
+      reviewedAt: null,
+    });
+  });
+
+  it('la autora también puede denunciar: la denunciada es la proponente', async () => {
+    const { author, proposer, exchange } = await setupExchange();
+
+    const res = await report(AUTHOR_UID, exchange.id, { reason: 'Mensajes ofensivos' });
+
+    expect(await prisma.report.findUniqueOrThrow({ where: { id: res.body.id } })).toMatchObject({
+      reporterId: author.id,
+      reportedUserId: proposer.id,
+    });
+  });
+
+  it('no cambia el intercambio, la card ni los mensajes, y el chat se sigue leyendo', async () => {
+    const { proposer, card, exchange } = await setupExchange({ status: 'accepted' });
+    await prisma.message.create({ data: { exchangeId: exchange.id, senderId: proposer.id, text: 'Hola' } });
+    const before = {
+      exchange: await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } }),
+      card: await prisma.card.findUniqueOrThrow({ where: { id: card.id } }),
+      messages: await prisma.message.findMany({ where: { exchangeId: exchange.id } }),
+    };
+
+    expect((await report(AUTHOR_UID, exchange.id, { reason: 'Spam' })).status).toBe(201);
+
+    expect(await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).toEqual(before.exchange);
+    expect(await prisma.card.findUniqueOrThrow({ where: { id: card.id } })).toEqual(before.card);
+    expect(await prisma.message.findMany({ where: { exchangeId: exchange.id } })).toEqual(before.messages);
+    for (const uid of [AUTHOR_UID, PROPOSER_UID]) {
+      expect((await getDetail(uid, exchange.id)).status).toBe(200);
+      expect((await getMessages(uid, exchange.id)).body).toHaveLength(1);
+    }
+  });
+
+  it('la persona denunciada no ve ninguna diferencia en sus respuestas', async () => {
+    const { author, exchange } = await setupExchange({ status: 'accepted' });
+    await prisma.message.create({ data: { exchangeId: exchange.id, senderId: author.id, text: 'Hola' } });
+    const before = [await getDetail(AUTHOR_UID, exchange.id), await getMessages(AUTHOR_UID, exchange.id)];
+
+    expect((await report(PROPOSER_UID, exchange.id, { reason: 'Spam' })).status).toBe(201);
+
+    const after = [await getDetail(AUTHOR_UID, exchange.id), await getMessages(AUTHOR_UID, exchange.id)];
+    expect(after.map((res) => res.body)).toEqual(before.map((res) => res.body));
+  });
+
+  it('se permite denunciar dos veces la misma conversación', async () => {
+    const { exchange } = await setupExchange();
+
+    expect((await report(PROPOSER_UID, exchange.id, { reason: 'Spam' })).status).toBe(201);
+    expect((await report(PROPOSER_UID, exchange.id, { reason: 'Sigue con el spam' })).status).toBe(201);
+    expect(await prisma.report.count({ where: { exchangeId: exchange.id } })).toBe(2);
+  });
+
+  it('acepta un motivo de exactamente 1000 caracteres', async () => {
+    const { exchange } = await setupExchange();
+
+    expect((await report(PROPOSER_UID, exchange.id, { reason: 'a'.repeat(1000) })).status).toBe(201);
+  });
+
+  it.each([
+    ['sin reason', {}],
+    ['con reason que no es un texto', { reason: 42 }],
+    ['con reason vacío', { reason: '' }],
+    ['con reason de solo espacios', { reason: '  \n\t ' }],
+    ['con reason de más de 1000 caracteres', { reason: 'a'.repeat(1001) }],
+  ])('devuelve 400 %s y no crea la denuncia', async (_case, body) => {
+    const { exchange } = await setupExchange();
+
+    const res = await report(PROPOSER_UID, exchange.id, body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: expect.any(String) });
+    expect(await prisma.report.count()).toBe(0);
+  });
+
+  it('a una tercera persona le responde igual que si el intercambio no existiera y no crea nada', async () => {
+    const { exchange } = await setupExchange({ status: 'confirmed' });
+    const missing = await report(AUTHOR_UID, MISSING_ID, { reason: 'Spam' });
+
+    for (const body of [{ reason: 'Spam' }, { reason: '' }]) {
+      const res = await report(OUTSIDER_UID, exchange.id, body);
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual(missing.body);
+    }
+    expect(missing.status).toBe(404);
+    expect(await prisma.report.count()).toBe(0);
+  });
+
+  it('devuelve 404 si la usuaria no está registrada', async () => {
+    const { exchange } = await setupExchange();
+
+    const res = await report('uid-sin-registro', exchange.id, { reason: 'Spam' });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Usuario no registrado' });
+  });
+});
+
 // chat.feature — "El teléfono no se comparte por defecto"
 describe('privacidad del chat', () => {
   const CONTACT_KEY = /mail|phone|tel[eé]fono|m[oó]vil|mobile|whatsapp/i;
@@ -362,12 +486,13 @@ describe('privacidad del chat', () => {
     return [{ path, value }];
   }
 
-  // Todas las rutas del chat; las de confirmar y denunciar se añaden aquí cuando existan.
+  // Todas las rutas del chat: si se añade una nueva, va aquí.
   const CHAT_ROUTES: [string, (uid: string, exchangeId: string) => request.Test][] = [
     ['GET /:id', (uid, id) => getDetail(uid, id)],
     ['GET /:id/messages', (uid, id) => getMessages(uid, id)],
     ['POST /:id/messages', (uid, id) => sendMessage(uid, id, { text: 'Nos vemos el sábado' })],
     ['PATCH /:id/confirm', (uid, id) => confirm(uid, id)],
+    ['POST /:id/report', (uid, id) => report(uid, id, { reason: 'Me pidió el email' })],
   ];
 
   // Cada ruta y cada persona con sus propios datos: algunas rutas cambian el estado y la siguiente llamada ya no valdría.
