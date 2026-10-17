@@ -327,3 +327,46 @@ describe('POST /api/exchanges/:id/messages', () => {
     expect(res.body).toEqual({ error: 'Usuario no registrado' });
   });
 });
+
+// chat.feature — "El teléfono no se comparte por defecto"
+describe('privacidad del chat', () => {
+  const CONTACT_KEY = /mail|phone|tel[eé]fono|m[oó]vil|mobile|whatsapp/i;
+
+  // Recorre todo el JSON: cualquier campo nuevo que se cuele en un select, por anidado que esté, sale aquí.
+  function collectEntries(value: unknown, path = '$'): { path: string; key?: string; value: unknown }[] {
+    if (Array.isArray(value)) return value.flatMap((item, i) => collectEntries(item, `${path}[${i}]`));
+    if (typeof value === 'object' && value !== null) {
+      return Object.entries(value).flatMap(([key, child]) => [
+        { path: `${path}.${key}`, key, value: child },
+        ...collectEntries(child, `${path}.${key}`),
+      ]);
+    }
+    return [{ path, value }];
+  }
+
+  // Todas las rutas del chat; las de confirmar y denunciar se añaden aquí cuando existan.
+  const CHAT_ROUTES: [string, (uid: string, exchangeId: string) => request.Test][] = [
+    ['GET /:id', (uid, id) => getDetail(uid, id)],
+    ['GET /:id/messages', (uid, id) => getMessages(uid, id)],
+    ['POST /:id/messages', (uid, id) => sendMessage(uid, id, { text: 'Nos vemos el sábado' })],
+  ];
+
+  it.each(CHAT_ROUTES)('%s no expone datos de contacto a ninguna de las dos personas', async (_route, call) => {
+    const { author, proposer, exchange } = await setupExchange({ status: 'accepted' });
+    await prisma.message.create({ data: { exchangeId: exchange.id, senderId: author.id, text: 'Hola' } });
+    const emails = [author.email, proposer.email];
+
+    for (const uid of [AUTHOR_UID, PROPOSER_UID]) {
+      const res = await call(uid, exchange.id);
+      expect(res.status).toBeLessThan(300);
+
+      const entries = collectEntries(res.body);
+      expect(entries.filter(({ key }) => key !== undefined && CONTACT_KEY.test(key)).map(({ path }) => path)).toEqual([]);
+      expect(
+        entries
+          .filter(({ value }) => typeof value === 'string' && emails.some((email) => value.includes(email)))
+          .map(({ path }) => path),
+      ).toEqual([]);
+    }
+  });
+});
