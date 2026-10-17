@@ -767,6 +767,10 @@ describe('PATCH /api/exchanges/:id/confirm — segunda confirmación', () => {
     consoleError.mockRestore();
 
     expect(res.status).toBe(500);
+    // Error genérico: ni el mensaje interno ni la traza llegan al cliente.
+    expect(res.body).toEqual({ error: 'internal_error' });
+    expect(res.text).not.toContain('transferencia');
+    expect(res.text).not.toContain(exchange.id);
     expect(await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).toEqual(before);
     expect(await transfersOf(exchange.id)).toHaveLength(1);
   });
