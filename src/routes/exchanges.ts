@@ -4,6 +4,7 @@ import {
   getCardExchangeState,
   getExchange,
   getMessages,
+  patchConfirm,
   patchExchange,
   postExchange,
   postMessage,
@@ -19,5 +20,6 @@ router.post('/:id/messages', verifyToken, postMessage);
 router.patch('/:id/accept', verifyToken, patchExchange('accept'));
 router.patch('/:id/reject', verifyToken, patchExchange('reject'));
 router.patch('/:id/cancel', verifyToken, patchExchange('cancel'));
+router.patch('/:id/confirm', verifyToken, patchConfirm);
 
 export default router;

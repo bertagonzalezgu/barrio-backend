@@ -49,6 +49,10 @@ function getDetail(uid: string, exchangeId: string) {
   return request(app).get(`/api/exchanges/${exchangeId}`).set('Authorization', `Bearer ${uid}`);
 }
 
+function confirm(uid: string, exchangeId: string) {
+  return request(app).patch(`/api/exchanges/${exchangeId}/confirm`).set('Authorization', `Bearer ${uid}`);
+}
+
 function getMessages(uid: string, exchangeId: string) {
   return request(app).get(`/api/exchanges/${exchangeId}/messages`).set('Authorization', `Bearer ${uid}`);
 }
@@ -118,8 +122,8 @@ describe('GET /api/exchanges/:id', () => {
     it.each([
       ['proposed', AUTHOR_UID, ['accept', 'reject', 'cancel']],
       ['proposed', PROPOSER_UID, ['cancel']],
-      ['accepted', AUTHOR_UID, ['cancel']],
-      ['accepted', PROPOSER_UID, ['cancel']],
+      ['accepted', AUTHOR_UID, ['cancel', 'confirm']],
+      ['accepted', PROPOSER_UID, ['cancel', 'confirm']],
       ['done', AUTHOR_UID, []],
       ['confirmed', PROPOSER_UID, []],
       ['rated', AUTHOR_UID, []],
@@ -349,24 +353,26 @@ describe('privacidad del chat', () => {
     ['GET /:id', (uid, id) => getDetail(uid, id)],
     ['GET /:id/messages', (uid, id) => getMessages(uid, id)],
     ['POST /:id/messages', (uid, id) => sendMessage(uid, id, { text: 'Nos vemos el sábado' })],
+    ['PATCH /:id/confirm', (uid, id) => confirm(uid, id)],
   ];
 
-  it.each(CHAT_ROUTES)('%s no expone datos de contacto a ninguna de las dos personas', async (_route, call) => {
+  // Cada ruta y cada persona con sus propios datos: algunas rutas cambian el estado y la siguiente llamada ya no valdría.
+  const CASES = CHAT_ROUTES.flatMap(([route, call]) => [AUTHOR_UID, PROPOSER_UID].map((uid) => [route, uid, call] as const));
+
+  it.each(CASES)('%s no expone datos de contacto a %s', async (_route, uid, call) => {
     const { author, proposer, exchange } = await setupExchange({ status: 'accepted' });
     await prisma.message.create({ data: { exchangeId: exchange.id, senderId: author.id, text: 'Hola' } });
     const emails = [author.email, proposer.email];
 
-    for (const uid of [AUTHOR_UID, PROPOSER_UID]) {
-      const res = await call(uid, exchange.id);
-      expect(res.status).toBeLessThan(300);
+    const res = await call(uid, exchange.id);
+    expect(res.status).toBeLessThan(300);
 
-      const entries = collectEntries(res.body);
-      expect(entries.filter(({ key }) => key !== undefined && CONTACT_KEY.test(key)).map(({ path }) => path)).toEqual([]);
-      expect(
-        entries
-          .filter(({ value }) => typeof value === 'string' && emails.some((email) => value.includes(email)))
-          .map(({ path }) => path),
-      ).toEqual([]);
-    }
+    const entries = collectEntries(res.body);
+    expect(entries.filter(({ key }) => key !== undefined && CONTACT_KEY.test(key)).map(({ path }) => path)).toEqual([]);
+    expect(
+      entries
+        .filter(({ value }) => typeof value === 'string' && emails.some((email) => value.includes(email)))
+        .map(({ path }) => path),
+    ).toEqual([]);
   });
 });

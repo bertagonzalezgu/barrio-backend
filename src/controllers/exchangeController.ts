@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { listMessages, sendMessage } from '../services/chatService';
 import {
+  confirmExchange,
   createExchange,
   getExchangeDetail,
   getMyExchangeOnCard,
@@ -21,6 +22,7 @@ const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }
   forbidden: { status: 403, error: 'Your role in this exchange does not allow this action' },
   'invalid-transition': { status: 409, error: 'invalid_transition' },
   'chat-closed': { status: 409, error: 'chat_closed' },
+  'already-confirmed': { status: 409, error: 'already_confirmed' },
 };
 
 function sendFailure(res: Response, reason: ExchangeFailure): void {
@@ -129,4 +131,19 @@ export async function postMessage(req: Request<{ id: string }>, res: Response): 
   }
 
   res.status(201).json(result.message);
+}
+
+export async function patchConfirm(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await confirmExchange(req.user.uid, req.params.id);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.detail);
 }

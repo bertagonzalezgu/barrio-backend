@@ -494,3 +494,153 @@ describe('PATCH /api/exchanges/:id/cancel', () => {
     expect(res.body).toEqual({ error: 'invalid_transition' });
   });
 });
+
+function confirm(uid: string, exchangeId: string) {
+  return request(app).patch(`/api/exchanges/${exchangeId}/confirm`).set('Authorization', `Bearer ${uid}`);
+}
+
+async function setupAccepted(type: CardType, options: { hours?: number; authorHours?: number; proposerHours?: number } = {}) {
+  const setup = await setupProposal(type, options);
+  await transition(AUTHOR_UID, setup.exchange.id, 'accept');
+  return setup;
+}
+
+describe('PATCH /api/exchanges/:id/confirm', () => {
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).patch('/api/exchanges/x/confirm');
+    expect(res.status).toBe(401);
+  });
+
+  describe('primera confirmación', () => {
+    it.each([
+      [AUTHOR_UID, 'receiverConfirmedAt', 'proposerConfirmedAt'],
+      [PROPOSER_UID, 'proposerConfirmedAt', 'receiverConfirmedAt'],
+    ] as const)('%s confirma: el intercambio pasa a done y la card a completed', async (uid, mine, other) => {
+      const { card, exchange } = await setupAccepted('request');
+
+      const res = await confirm(uid, exchange.id);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ id: exchange.id, status: 'done', myConfirmed: true, otherConfirmed: false });
+      const stored = await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } });
+      expect(stored).toMatchObject({ status: 'done', doneAt: expect.any(Date), [mine]: expect.any(Date), [other]: null, confirmedAt: null });
+      expect((await prisma.card.findUniqueOrThrow({ where: { id: card.id } })).status).toBe('completed');
+    });
+
+    it.each([
+      ['offer', PROPOSER_UID],
+      ['request', AUTHOR_UID],
+    ] as const)('en una card %s no mueve horas: siguen reservadas a la pagadora y no hay transferencia', async (type, payerUid) => {
+      const { exchange } = await setupAccepted(type);
+
+      expect((await confirm(AUTHOR_UID, exchange.id)).status).toBe(200);
+
+      expect(await prisma.timeTransaction.count({ where: { exchangeId: exchange.id } })).toBe(0);
+      expect(await getBalance(payerUid)).toEqual({ balance: 5, reserved: 3, available: 2 });
+    });
+
+    it.each(['reported', 'deleted'] as const)('no pisa una card %s, pero la confirmación sigue adelante', async (cardStatus) => {
+      const { card, exchange } = await setupAccepted('request');
+      await prisma.card.update({ where: { id: card.id }, data: { status: cardStatus } });
+
+      const res = await confirm(PROPOSER_UID, exchange.id);
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('done');
+      expect((await prisma.card.findUniqueOrThrow({ where: { id: card.id } })).status).toBe(cardStatus);
+    });
+  });
+
+  it('si la misma persona confirma dos veces devuelve 409 already_confirmed y no cambia nada', async () => {
+    const { exchange } = await setupAccepted('request');
+    await confirm(PROPOSER_UID, exchange.id);
+    const before = await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } });
+
+    const res = await confirm(PROPOSER_UID, exchange.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'already_confirmed' });
+    expect(await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).toEqual(before);
+    expect(await prisma.timeTransaction.count({ where: { exchangeId: exchange.id } })).toBe(0);
+  });
+
+  it.each(['proposed', 'rejected', 'cancelled'] as const)('devuelve 409 invalid_transition desde %s', async (status) => {
+    const { card, exchange } = await setupProposal('request');
+    await prisma.exchange.update({ where: { id: exchange.id }, data: { status } });
+
+    const res = await confirm(AUTHOR_UID, exchange.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'invalid_transition' });
+    expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe(status);
+    expect((await prisma.card.findUniqueOrThrow({ where: { id: card.id } })).status).toBe('active');
+  });
+
+  it('devuelve 404 si no participo en el intercambio o no existe', async () => {
+    const { exchange } = await setupAccepted('request');
+    await createUser('uid-ajena');
+
+    expect((await confirm('uid-ajena', exchange.id)).status).toBe(404);
+    expect((await confirm(AUTHOR_UID, '00000000-0000-0000-0000-000000000000')).status).toBe(404);
+    expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe('accepted');
+  });
+
+  // Flujos de la tarjeta 12 cuando la card ya está completed por una confirmación.
+  describe('con la card completed tras la primera confirmación', () => {
+    async function setupCompletedWithThirdProposal() {
+      const setup = await setupAccepted('request');
+      const third = await createUser('uid-tercera');
+      const thirdProposal = await prisma.exchange.create({
+        data: { cardId: setup.card.id, proposerId: third.id, receiverId: setup.author.id, hours: setup.card.hours },
+      });
+      expect((await confirm(PROPOSER_UID, setup.exchange.id)).status).toBe(200);
+      expect((await prisma.card.findUniqueOrThrow({ where: { id: setup.card.id } })).status).toBe('completed');
+      return { ...setup, thirdProposal };
+    }
+
+    it('el estado de la card la marca no disponible y sigue mostrando mi intercambio', async () => {
+      const { card, exchange } = await setupCompletedWithThirdProposal();
+
+      expect((await getCardState(PROPOSER_UID, card.id)).body).toEqual({
+        mine: { id: exchange.id, status: 'done' },
+        cardAvailable: false,
+      });
+      expect((await getCardState('uid-tercera', card.id)).body).toEqual({
+        mine: { id: expect.any(String), status: 'proposed' },
+        cardAvailable: false,
+      });
+    });
+
+    it('nadie puede proponer de nuevo: 409 card_unavailable', async () => {
+      const { card } = await setupCompletedWithThirdProposal();
+      await createUser('uid-nueva');
+
+      const res = await propose('uid-nueva', { cardId: card.id });
+
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: 'card_unavailable' });
+    });
+
+    it('la propuesta de una tercera persona sigue proposed: no se puede aceptar, pero sí rechazar o cancelar', async () => {
+      const { thirdProposal } = await setupCompletedWithThirdProposal();
+
+      const detail = await request(app).get(`/api/exchanges/${thirdProposal.id}`).set('Authorization', `Bearer ${AUTHOR_UID}`);
+      expect(detail.body.actions).toEqual(['reject', 'cancel']);
+
+      const accept = await transition(AUTHOR_UID, thirdProposal.id, 'accept');
+      expect(accept.status).toBe(409);
+      expect(accept.body).toEqual({ error: 'card_unavailable' });
+
+      expect((await transition(AUTHOR_UID, thirdProposal.id, 'reject')).body.status).toBe('rejected');
+    });
+
+    it('el intercambio en done no se puede cancelar', async () => {
+      const { exchange } = await setupCompletedWithThirdProposal();
+
+      const res = await transition(AUTHOR_UID, exchange.id, 'cancel');
+
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error: 'invalid_transition' });
+    });
+  });
+});
