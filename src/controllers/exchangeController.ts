@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { listMessages, reportConversation, sendMessage } from '../services/chatService';
+import { listMessages, listMyChats, reportConversation, sendMessage } from '../services/chatService';
 import {
   confirmExchange,
   createExchange,
@@ -166,4 +166,19 @@ export async function postReport(req: Request<{ id: string }>, res: Response): P
   }
 
   res.status(201).json(result.report);
+}
+
+export async function getChats(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await listMyChats(req.user.uid);
+  if (!result.ok) {
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.json(result.chats);
 }

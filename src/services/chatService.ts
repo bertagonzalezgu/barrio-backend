@@ -1,7 +1,13 @@
 import { prisma } from '../config/prisma';
-import type { ExchangeStatus } from '../generated/prisma/client';
+import type { CardType, ExchangeStatus } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
-import { ACTIVE_STATUSES, findParticipation, type ExchangeFailure } from './exchangeService';
+import {
+  ACTIVE_STATUSES,
+  findParticipation,
+  findUserId,
+  PARTICIPANT_SELECT,
+  type ExchangeFailure,
+} from './exchangeService';
 
 export interface ChatMessage {
   id: string;
@@ -101,4 +107,44 @@ export async function reportConversation(firebaseUid: string, exchangeId: string
     select: { id: true, createdAt: true },
   });
   return { ok: true, report };
+}
+
+export interface ChatSummary {
+  id: string;
+  status: ExchangeStatus;
+  hours: number;
+  proposedAt: Date;
+  card: { id: string; title: string; type: CardType };
+  other: { id: string; name: string; avatar: string };
+}
+
+// La bandeja de chats: todos mis intercambios, en cualquier estado y aunque la card ya no esté activa.
+export async function listMyChats(
+  firebaseUid: string,
+): Promise<{ ok: true; chats: ChatSummary[] } | { ok: false; reason: 'user-not-found' }> {
+  const userId = await findUserId(firebaseUid);
+  if (!userId) return { ok: false, reason: 'user-not-found' };
+
+  const exchanges = await prisma.exchange.findMany({
+    where: { OR: [{ proposerId: userId }, { receiverId: userId }] },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      status: true,
+      hours: true,
+      proposedAt: true,
+      proposerId: true,
+      card: { select: { id: true, title: true, type: true } },
+      proposer: { select: PARTICIPANT_SELECT },
+      receiver: { select: PARTICIPANT_SELECT },
+    },
+  });
+
+  return {
+    ok: true,
+    chats: exchanges.map(({ proposerId, proposer, receiver, ...exchange }) => ({
+      ...exchange,
+      other: proposerId === userId ? receiver : proposer,
+    })),
+  };
 }
