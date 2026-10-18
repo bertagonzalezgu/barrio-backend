@@ -488,6 +488,7 @@ describe('privacidad del chat', () => {
 
   // Todas las rutas del chat: si se añade una nueva, va aquí.
   const CHAT_ROUTES: [string, (uid: string, exchangeId: string) => request.Test][] = [
+    ['GET /', (uid) => request(app).get('/api/exchanges').set('Authorization', `Bearer ${uid}`)],
     ['GET /:id', (uid, id) => getDetail(uid, id)],
     ['GET /:id/messages', (uid, id) => getMessages(uid, id)],
     ['POST /:id/messages', (uid, id) => sendMessage(uid, id, { text: 'Nos vemos el sábado' })],
