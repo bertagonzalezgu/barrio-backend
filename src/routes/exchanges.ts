@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { verifyToken } from '../middleware/auth';
 import {
   getCardExchangeState,
+  getChats,
   getExchange,
   getMessages,
   patchConfirm,
@@ -13,6 +14,7 @@ import {
 
 const router = Router();
 
+router.get('/', verifyToken, getChats);
 router.post('/', verifyToken, postExchange);
 router.get('/card/:cardId', verifyToken, getCardExchangeState);
 router.get('/:id', verifyToken, getExchange);

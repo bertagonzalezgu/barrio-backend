@@ -1,6 +1,6 @@
-# Contrato de la API del chat interno (tarjeta 13)
+# Contrato de la API del chat interno (tarjetas 13 y 13.b)
 
-Comportamiento real de `barrio-backend` en la rama `feature/internal-chat`. Salvo donde pone *(sin test)*, cada afirmación está cubierta por un test en `src/routes/chat.test.ts`, `src/routes/exchanges.test.ts`, `src/services/exchangeService.test.ts` o `src/middleware/errorHandler.test.ts`.
+Comportamiento real de `barrio-backend` tras las tarjetas 13 (chat interno, rama `feature/internal-chat`) y 13.b (bandeja de chats, rama `feature/chats-inbox`). Salvo donde pone *(sin test)*, cada afirmación está cubierta por un test en `src/routes/chat.test.ts`, `src/routes/chatsInbox.test.ts`, `src/routes/exchanges.test.ts`, `src/services/exchangeService.test.ts` o `src/middleware/errorHandler.test.ts`.
 
 ## Convenciones comunes
 
@@ -26,6 +26,57 @@ Comportamiento real de `barrio-backend` en la rama `feature/internal-chat`. Salv
 | 500 | `internal_error` | Error no controlado. Nunca incluye detalles internos. El manejador es común a todas las rutas; está probado a través de `PATCH /:id/confirm`. |
 
 En las tablas de cada endpoint solo aparecen los errores propios de ese endpoint.
+
+## `GET /api/exchanges`: bandeja de chats
+
+Todos los intercambios de quien pregunta, como proponente o como receptora, para pintar la bandeja `/chats`.
+
+- **Estados:** salen todos (`proposed`, `accepted`, `done`, `confirmed`, `rated`, `cancelled`, `rejected`). Agrupar en "En curso" / "Cerrados" lo hace el frontend.
+- **Cards:** también salen los intercambios cuya card está `deleted` o `reported`, con su título.
+- **Intercambios ajenos:** nunca aparecen los intercambios entre otras dos personas.
+- **Sin paginación, búsqueda ni filtros.**
+
+**Petición:** sin cuerpo.
+
+**Respuesta `200`:** un array, `[]` si no hay intercambios.
+
+```json
+[
+  {
+    "id": "6f1c2a8e-3b4d-4c5e-9f60-1a2b3c4d5e6f",
+    "status": "proposed",
+    "hours": 3,
+    "proposedAt": "2026-10-17T14:05:24.000Z",
+    "card": { "id": "a7b8c9d0-1e2f-4a3b-8c4d-5e6f7a8b9c0d", "title": "Regar plantas", "type": "request" },
+    "other": { "id": "0d9c8b7a-6f5e-4d3c-2b1a-0f9e8d7c6b5a", "name": "Ana", "avatar": "" },
+    "lastMessage": { "text": "¿Quedamos el sábado?", "sentAt": "2026-10-18T09:00:00.000Z", "mine": false },
+    "lastActivityAt": "2026-10-18T09:00:00.000Z"
+  }
+]
+```
+
+| Campo | Significado |
+|---|---|
+| `id` | Id del intercambio, que es también el id del chat (`GET /:id`, `GET /:id/messages`…). |
+| `status` | Estado del intercambio, como en el detalle. |
+| `hours` | Horas del intercambio. |
+| `proposedAt` | Cuándo se propuso. Sirve de fecha del adelanto cuando `lastMessage` es `null`. |
+| `card` | `id`, `title` y `type` de la card, sea cual sea su estado. |
+| `other` | La otra persona, vista desde quien pregunta: `id`, `name` y `avatar` (`""` si no tiene). |
+| `lastMessage` | El mensaje más reciente del intercambio, o `null` si no hay ninguno. `text` va completo (el frontend lo recorta); `mine` es `true` si lo envió quien pregunta. No incluye quién lo envió. |
+| `lastActivityAt` | Lo más reciente entre el último cambio del intercambio (`updatedAt`) y `lastMessage.sentAt`. Enviar un mensaje no cambia el intercambio, por eso se combinan las dos fechas. Sin mensajes, es el último cambio. |
+
+**Qué cuenta como "último cambio":** cualquier escritura sobre el intercambio. Hoy son las transiciones: aceptar, rechazar, cancelar y confirmar (probado con cancelar; las demás escriben igual sobre el intercambio *(sin test en la bandeja)*). Denunciar la conversación no lo cambia.
+
+**Orden:** `lastActivityAt` de más reciente a más antigua. Con la misma `lastActivityAt`, por `id` ascendente, así que el orden es siempre el mismo.
+
+- **Un mensaje nuevo** sube su intercambio por encima de otro que cambió de estado antes.
+- **Un cambio de estado** sube su intercambio aunque no tenga mensajes nuevos.
+- **Dos mensajes del mismo milisegundo:** si ambos son los últimos de un intercambio, `lastMessage` es el de mayor `id`. *(sin test)*
+
+**Rendimiento:** el número de consultas no crece con el número de intercambios. Además de buscar a la usuaria, son dos: una trae los intercambios con su card y las dos personas; otra, solo el último mensaje de cada uno (`DISTINCT ON`, con el índice `[exchangeId, sentAt]`). *(sin test)*
+
+**Errores propios:** ninguno, aparte de los comunes (401 y `404 Usuario no registrado`). No hay 400 ni 409.
 
 ## `GET /api/exchanges/:id`: detalle del intercambio
 

@@ -36,7 +36,7 @@ export function parseCreateExchangeInput(body: unknown): ParseResult<CreateExcha
   return { ok: true, data: { cardId } };
 }
 
-async function findUserId(firebaseUid: string): Promise<string | null> {
+export async function findUserId(firebaseUid: string): Promise<string | null> {
   const user = await prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } });
   return user?.id ?? null;
 }
@@ -226,7 +226,7 @@ export async function transitionExchange(
 }
 
 // Select explícito: de la otra persona solo sale lo que el chat necesita pintar, nunca su email.
-const PARTICIPANT_SELECT = { id: true, name: true, avatar: true } as const;
+export const PARTICIPANT_SELECT = { id: true, name: true, avatar: true } as const;
 
 export interface ExchangeDetail {
   id: string;
