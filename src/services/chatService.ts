@@ -116,9 +116,41 @@ export interface ChatSummary {
   proposedAt: Date;
   card: { id: string; title: string; type: CardType };
   other: { id: string; name: string; avatar: string };
+  lastMessage: { text: string; sentAt: Date; mine: boolean } | null;
+  lastActivityAt: Date;
+}
+
+interface LastMessageRow {
+  exchangeId: string;
+  text: string;
+  sentAt: Date;
+  senderId: string;
+}
+
+// Una sola consulta para el último mensaje de todos los intercambios. Prisma `distinct` traería todos los mensajes
+// y deduplicaría en memoria; DISTINCT ON se queda con la primera fila por exchangeId en el propio Postgres, apoyándose
+// en el índice [exchangeId, sentAt]. El id solo desempata dos mensajes del mismo milisegundo.
+async function findLastMessages(exchangeIds: string[]): Promise<Map<string, LastMessageRow>> {
+  if (exchangeIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<LastMessageRow[]>`
+    SELECT DISTINCT ON ("exchangeId") "exchangeId", "text", "sentAt", "senderId"
+    FROM "Message"
+    WHERE "exchangeId" = ANY(${exchangeIds}::text[])
+    ORDER BY "exchangeId", "sentAt" DESC, "id" DESC
+  `;
+  return new Map(rows.map((row) => [row.exchangeId, row]));
+}
+
+// Más reciente primero; con la misma actividad, por id para que el orden sea siempre el mismo.
+// Comparación directa y no localeCompare, que depende del idioma y puede ignorar los guiones de los UUID.
+function byLastActivity(a: ChatSummary, b: ChatSummary): number {
+  const byActivity = b.lastActivityAt.getTime() - a.lastActivityAt.getTime();
+  if (byActivity !== 0) return byActivity;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
 // La bandeja de chats: todos mis intercambios, en cualquier estado y aunque la card ya no esté activa.
+// Se ordena en JS porque lastActivityAt combina dos tablas; si algún día hay paginación, el orden tendrá que ir a SQL.
 export async function listMyChats(
   firebaseUid: string,
 ): Promise<{ ok: true; chats: ChatSummary[] } | { ok: false; reason: 'user-not-found' }> {
@@ -127,24 +159,30 @@ export async function listMyChats(
 
   const exchanges = await prisma.exchange.findMany({
     where: { OR: [{ proposerId: userId }, { receiverId: userId }] },
-    orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
     select: {
       id: true,
       status: true,
       hours: true,
       proposedAt: true,
+      updatedAt: true,
       proposerId: true,
       card: { select: { id: true, title: true, type: true } },
       proposer: { select: PARTICIPANT_SELECT },
       receiver: { select: PARTICIPANT_SELECT },
     },
   });
+  const lastMessages = await findLastMessages(exchanges.map(({ id }) => id));
 
-  return {
-    ok: true,
-    chats: exchanges.map(({ proposerId, proposer, receiver, ...exchange }) => ({
+  const chats = exchanges.map(({ proposerId, proposer, receiver, updatedAt, ...exchange }): ChatSummary => {
+    const last = lastMessages.get(exchange.id);
+    // Enviar un mensaje no toca Exchange.updatedAt: la actividad es lo más reciente de las dos cosas.
+    const lastActivityAt = last && last.sentAt > updatedAt ? last.sentAt : updatedAt;
+    return {
       ...exchange,
       other: proposerId === userId ? receiver : proposer,
-    })),
-  };
+      lastMessage: last ? { text: last.text, sentAt: last.sentAt, mine: last.senderId === userId } : null,
+      lastActivityAt,
+    };
+  });
+  return { ok: true, chats: chats.sort(byLastActivity) };
 }
