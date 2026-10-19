@@ -1,4 +1,5 @@
 import { prisma } from '../config/prisma';
+import type { ExchangeStatus } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
 import type { InvalidInput } from './chatService';
 import {
@@ -12,6 +13,9 @@ import {
 import { parseOptionalText } from './textInput';
 
 const COMMENT_MAX_LENGTH = 500;
+
+// En rated ya han valorado las dos, pero se deja pasar para que quien repite reciba already-rated y no not-confirmed.
+const RATEABLE_STATUSES: ExchangeStatus[] = ['confirmed', 'rated'];
 
 export interface RatingInput {
   score: number;
@@ -41,12 +45,17 @@ export async function rateExchange(firebaseUid: string, exchangeId: string, body
   if (!input.ok) return { ok: false, reason: 'invalid', error: input.error };
 
   const { userId, parties } = participation;
-  await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     await lockCard(tx, parties.cardId);
+    const { status } = await tx.exchange.findUniqueOrThrow({ where: { id: exchangeId }, select: { status: true } });
+    if (!RATEABLE_STATUSES.includes(status)) return { ok: false, reason: 'not-confirmed' } as const;
+
     await tx.rating.create({
       data: { exchangeId, raterId: userId, ratedUserId: otherParty(parties, userId), ...input.data },
     });
+    return { ok: true } as const;
   });
+  if (!result.ok) return result;
 
   return { ok: true, detail: await buildDetail(exchangeId, parties.receiverId === userId) };
 }

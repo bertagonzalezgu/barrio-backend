@@ -24,6 +24,7 @@ const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }
   'invalid-transition': { status: 409, error: 'invalid_transition' },
   'chat-closed': { status: 409, error: 'chat_closed' },
   'already-confirmed': { status: 409, error: 'already_confirmed' },
+  'not-confirmed': { status: 409, error: 'not_confirmed' },
 };
 
 function sendFailure(res: Response, reason: ExchangeFailure): void {

@@ -175,6 +175,30 @@ describe('POST /api/exchanges/:id/rating', () => {
     expect(await prisma.timeTransaction.count()).toBe(1);
   });
 
+  // confianza.feature — "No se puede valorar un intercambio sin confirmar"
+  it.each(['proposed', 'accepted', 'done', 'cancelled', 'rejected'] as const)(
+    'con el intercambio %s devuelve 409 not_confirmed a las dos personas y no guarda nada',
+    async (status) => {
+      const { exchange } = await setupExchange(status);
+
+      for (const uid of [AUTHOR_UID, PROPOSER_UID]) {
+        const res = await rate(uid, exchange.id, { score: 4 });
+        expect(res.status).toBe(409);
+        expect(res.body).toEqual({ error: 'not_confirmed' });
+      }
+      expect(await prisma.rating.count()).toBe(0);
+      expect((await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).status).toBe(status);
+    },
+  );
+
+  it('comprueba el cuerpo antes que el estado: cuerpo inválido en un intercambio sin confirmar da 400', async () => {
+    const { exchange } = await setupExchange('accepted');
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 9 });
+
+    expect(res.status).toBe(400);
+  });
+
   // A quien no participa no le decimos que el intercambio existe, ni en qué estado está.
   it.each(ALL_STATUSES)(
     'con el intercambio %s, a una tercera persona le responde igual que si no existiera, sea cual sea el cuerpo',

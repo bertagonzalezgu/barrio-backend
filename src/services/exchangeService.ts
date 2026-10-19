@@ -16,7 +16,8 @@ export type ExchangeFailure =
   | 'forbidden'
   | 'invalid-transition'
   | 'chat-closed'
-  | 'already-confirmed';
+  | 'already-confirmed'
+  | 'not-confirmed';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
