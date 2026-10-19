@@ -38,6 +38,14 @@ describe('POST /api/users/me', () => {
     expect(await prisma.timeTransaction.count({ where: { toUserId: res.body.id } })).toBe(1);
   });
 
+  // La media de valoraciones se calcula al leer el perfil público, ya no es una columna del usuario.
+  it('la respuesta no incluye una columna rating', async () => {
+    const res = await registerAs({ uid: 'uid-sin-rating', email: 'sr@barrio.local' }, { name: 'Sara' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('rating');
+  });
+
   it('usa el nombre del token (p. ej. Google) si no viene en el body', async () => {
     const res = await registerAs({ uid: 'uid-google', email: 'g@barrio.local', name: 'Gina' });
 

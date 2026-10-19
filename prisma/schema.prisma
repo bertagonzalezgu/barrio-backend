@@ -65,7 +65,6 @@ model User {
   email        String   @unique
   avatar       String   @default("")
   verified     Boolean  @default(false)
-  rating       Float    @default(0)
   registeredAt DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -79,6 +78,8 @@ model User {
   reportsFiled         Report[]          @relation("ReportReporter")
   reportsReceived      Report[]          @relation("ReportedUser")
   messages             Message[]
+  ratingsGiven         Rating[]          @relation("RatingRater")
+  ratingsReceived      Rating[]          @relation("RatingRated")
 }
 
 model Card {
@@ -134,6 +135,7 @@ model Exchange {
   transactions TimeTransaction[]
   messages     Message[]
   reports      Report[]
+  ratings      Rating[]
 
   @@index([cardId])
   @@index([proposerId, status])
@@ -187,4 +189,21 @@ model Message {
   sentAt     DateTime @default(now())
 
   @@index([exchangeId, sentAt])
+}
+
+// score va de 1 a 5: además de la validación de la API, la migración añade un CHECK en la base de datos.
+model Rating {
+  id          String   @id @default(uuid())
+  exchangeId  String
+  exchange    Exchange @relation(fields: [exchangeId], references: [id])
+  raterId     String
+  rater       User     @relation("RatingRater", fields: [raterId], references: [id])
+  ratedUserId String
+  ratedUser   User     @relation("RatingRated", fields: [ratedUserId], references: [id])
+  score       Int
+  comment     String?  @db.VarChar(500)
+  createdAt   DateTime @default(now())
+
+  @@unique([exchangeId, raterId])
+  @@index([ratedUserId])
 }
