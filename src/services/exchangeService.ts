@@ -43,7 +43,7 @@ export async function findUserId(firebaseUid: string): Promise<string | null> {
 
 // Bloquea la fila hasta el final de la transacción: cualquier otra operación sobre la misma card espera su turno,
 // y al continuar lee el estado ya confirmado por la anterior (READ COMMITTED toma una foto nueva por consulta).
-async function lockCard(tx: Tx, cardId: string): Promise<void> {
+export async function lockCard(tx: Tx, cardId: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM "Card" WHERE id = ${cardId} FOR UPDATE`;
 }
 
@@ -151,6 +151,10 @@ interface Parties {
   cardId: string;
   proposerId: string;
   receiverId: string;
+}
+
+export function otherParty(parties: Parties, userId: string): string {
+  return userId === parties.proposerId ? parties.receiverId : parties.proposerId;
 }
 
 export type ParticipationResult =
@@ -271,7 +275,7 @@ export async function getExchangeDetail(firebaseUid: string, exchangeId: string)
   return { ok: true, detail: await buildDetail(exchangeId, participation.parties.receiverId === participation.userId) };
 }
 
-async function buildDetail(exchangeId: string, isReceiver: boolean): Promise<ExchangeDetail> {
+export async function buildDetail(exchangeId: string, isReceiver: boolean): Promise<ExchangeDetail> {
   const exchange = await prisma.exchange.findUniqueOrThrow({
     where: { id: exchangeId },
     select: {
@@ -309,8 +313,7 @@ async function createTransfer(tx: Tx, exchangeId: string, fromUserId: string, pa
   if ((await tx.timeTransaction.count({ where: { exchangeId, type: 'transfer' } })) > 0) {
     throw new Error(`El intercambio ${exchangeId} ya tiene una transferencia`);
   }
-  const toUserId = fromUserId === parties.proposerId ? parties.receiverId : parties.proposerId;
-  await tx.timeTransaction.create({ data: { type: 'transfer', exchangeId, fromUserId, toUserId, hours } });
+  await tx.timeTransaction.create({ data: { type: 'transfer', exchangeId, fromUserId, toUserId: otherParty(parties, fromUserId), hours } });
 }
 
 function myConfirmation(isReceiver: boolean, at: Date): Prisma.ExchangeUpdateInput {
