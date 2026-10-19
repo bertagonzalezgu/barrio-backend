@@ -60,6 +60,10 @@ export async function rateExchange(firebaseUid: string, exchangeId: string, body
       await tx.rating.create({
         data: { exchangeId, raterId: userId, ratedUserId: otherParty(parties, userId), ...input.data },
       });
+      // Solo hay dos participantes y cada una valora una vez: dos filas es que ya han valorado las dos.
+      if ((await tx.rating.count({ where: { exchangeId } })) === 2) {
+        await tx.exchange.update({ where: { id: exchangeId }, data: { status: 'rated', ratedAt: new Date() } });
+      }
       return { ok: true } as const;
     });
   } catch (error) {

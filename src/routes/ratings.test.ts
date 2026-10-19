@@ -114,6 +114,24 @@ describe('POST /api/exchanges/:id/rating', () => {
   });
 
   it.each([
+    [PROPOSER_UID, AUTHOR_UID],
+    [AUTHOR_UID, PROPOSER_UID],
+  ])('cuando valora la segunda persona (%s y después %s) el intercambio pasa a rated', async (first, second) => {
+    const { exchange } = await setupExchange();
+    await rate(first, exchange.id, { score: 5 });
+
+    const res = await rate(second, exchange.id, { score: 4 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe('rated');
+    expect(await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).toMatchObject({
+      status: 'rated',
+      ratedAt: expect.any(Date),
+    });
+    expect(await prisma.rating.count({ where: { exchangeId: exchange.id } })).toBe(2);
+  });
+
+  it.each([
     ['sin comment', { score: 3 }, null],
     ['con comment de solo espacios', { score: 3, comment: '  \n\t ' }, null],
     ['con comment vacío', { score: 3, comment: '' }, null],

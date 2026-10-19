@@ -30,6 +30,25 @@ async function setupConfirmedRound(round: number) {
 }
 
 describe('ratingService — valoraciones simultáneas', () => {
+  // Sin el bloqueo de la card, cada transacción contaría solo su propia valoración y ninguna marcaría rated.
+  it('las dos personas valoran a la vez: acaba rated con las dos valoraciones', async () => {
+    for (let round = 0; round < 5; round++) {
+      const { author, proposer, exchange } = await setupConfirmedRound(round);
+
+      const results = await Promise.all([
+        rateExchange(author.firebaseUid, exchange.id, { score: 4 }),
+        rateExchange(proposer.firebaseUid, exchange.id, { score: 5 }),
+      ]);
+
+      expect(results.every((r) => r.ok)).toBe(true);
+      expect(await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).toMatchObject({
+        status: 'rated',
+        ratedAt: expect.any(Date),
+      });
+      expect(await prisma.rating.count({ where: { exchangeId: exchange.id } })).toBe(2);
+    }
+  });
+
   it('la misma persona valora dos veces a la vez: una gana, la otra recibe already-rated y queda una sola fila', async () => {
     for (let round = 0; round < 5; round++) {
       const { proposer, exchange } = await setupConfirmedRound(round);
