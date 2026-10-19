@@ -77,6 +77,59 @@ function rate(uid: string, exchangeId: string, body: Record<string, unknown>) {
   return request(app).post(`/api/exchanges/${exchangeId}/rating`).set('Authorization', `Bearer ${uid}`).send(body);
 }
 
+function getDetail(uid: string, exchangeId: string) {
+  return request(app).get(`/api/exchanges/${exchangeId}`).set('Authorization', `Bearer ${uid}`);
+}
+
+// confianza.feature — "No se puede valorar dos veces el mismo intercambio": solo veo la valoración que ya di.
+describe('GET /api/exchanges/:id — myRating y la acción rate', () => {
+  it.each([AUTHOR_UID, PROPOSER_UID])('en confirmed sin valorar, %s ve myRating null y la acción rate', async (uid) => {
+    const { exchange } = await setupExchange();
+
+    const res = await getDetail(uid, exchange.id);
+
+    expect(res.body).toMatchObject({ myRating: null, actions: ['rate'] });
+  });
+
+  it('tras valorar, yo veo mi valoración sin la acción rate y la otra persona sigue pudiendo valorar', async () => {
+    const { exchange } = await setupExchange();
+    await rate(PROPOSER_UID, exchange.id, { score: 2, comment: 'Llegó tarde' });
+
+    const mine = await getDetail(PROPOSER_UID, exchange.id);
+    const theirs = await getDetail(AUTHOR_UID, exchange.id);
+
+    expect(mine.body).toMatchObject({ myRating: { score: 2, comment: 'Llegó tarde' }, actions: [] });
+    expect(theirs.body).toMatchObject({ myRating: null, actions: ['rate'] });
+  });
+
+  it('una valoración sin comentario sale con comment null', async () => {
+    const { exchange } = await setupExchange();
+    await rate(AUTHOR_UID, exchange.id, { score: 5 });
+
+    expect((await getDetail(AUTHOR_UID, exchange.id)).body.myRating).toEqual({ score: 5, comment: null });
+  });
+
+  it('en rated cada persona ve su propia valoración y ninguna acción', async () => {
+    const { exchange } = await setupExchange();
+    await rate(AUTHOR_UID, exchange.id, { score: 5 });
+    await rate(PROPOSER_UID, exchange.id, { score: 3 });
+
+    for (const [uid, score] of [[AUTHOR_UID, 5], [PROPOSER_UID, 3]] as const) {
+      expect((await getDetail(uid, exchange.id)).body).toMatchObject({ status: 'rated', myRating: { score }, actions: [] });
+    }
+  });
+
+  it.each(['proposed', 'accepted', 'done', 'cancelled', 'rejected'] as const)('con el intercambio %s no aparece rate', async (status) => {
+    const { exchange } = await setupExchange(status);
+
+    for (const uid of [AUTHOR_UID, PROPOSER_UID]) {
+      const res = await getDetail(uid, exchange.id);
+      expect(res.body.myRating).toBeNull();
+      expect(res.body.actions).not.toContain('rate');
+    }
+  });
+});
+
 // confianza.feature — "Valorar tras confirmar un intercambio"
 describe('POST /api/exchanges/:id/rating', () => {
   it('devuelve 401 sin token', async () => {
@@ -94,6 +147,9 @@ describe('POST /api/exchanges/:id/rating', () => {
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ id: setup.exchange.id, status: 'confirmed', other: { id: setup[ratedRole].id } });
+    expect(res.body.myRating).toEqual({ score: 4, comment: 'Muy puntual' });
+    expect(res.body.actions).toEqual([]);
+    expect(res.body).toEqual((await getDetail(uid, setup.exchange.id)).body);
     expect(await prisma.rating.findMany()).toEqual([
       expect.objectContaining({
         exchangeId: setup.exchange.id,

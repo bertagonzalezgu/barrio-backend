@@ -92,6 +92,7 @@ describe('GET /api/exchanges/:id', () => {
       other: { id: other.id, name: other.name, avatar: '' },
       myConfirmed: false,
       otherConfirmed: false,
+      myRating: null,
       actions: expect.any(Array),
     });
   });
@@ -128,7 +129,8 @@ describe('GET /api/exchanges/:id', () => {
   });
 
   describe('actions', () => {
-    // done siempre lleva exactamente una confirmación; confirmed y rated, las dos.
+    // done siempre lleva exactamente una confirmación; confirmed y rated, las dos. Aquí nadie ha valorado todavía:
+    // rate tras valorar se prueba en ratings.test.ts.
     it.each([
       ['proposed', [], AUTHOR_UID, ['accept', 'reject', 'cancel']],
       ['proposed', [], PROPOSER_UID, ['cancel']],
@@ -138,8 +140,8 @@ describe('GET /api/exchanges/:id', () => {
       ['done', ['proposer'], PROPOSER_UID, []],
       ['done', ['receiver'], AUTHOR_UID, []],
       ['done', ['receiver'], PROPOSER_UID, ['confirm']],
-      ['confirmed', ['proposer', 'receiver'], AUTHOR_UID, []],
-      ['confirmed', ['proposer', 'receiver'], PROPOSER_UID, []],
+      ['confirmed', ['proposer', 'receiver'], AUTHOR_UID, ['rate']],
+      ['confirmed', ['proposer', 'receiver'], PROPOSER_UID, ['rate']],
       ['rated', ['proposer', 'receiver'], AUTHOR_UID, []],
       ['cancelled', [], AUTHOR_UID, []],
       ['rejected', [], PROPOSER_UID, []],

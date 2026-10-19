@@ -666,7 +666,7 @@ describe('PATCH /api/exchanges/:id/confirm — segunda confirmación', () => {
     const res = await confirm(PROPOSER_UID, setup.exchange.id);
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: setup.exchange.id, status: 'confirmed', myConfirmed: true, otherConfirmed: true, actions: [] });
+    expect(res.body).toMatchObject({ id: setup.exchange.id, status: 'confirmed', myConfirmed: true, otherConfirmed: true, actions: ['rate'] });
     expect(await prisma.exchange.findUniqueOrThrow({ where: { id: setup.exchange.id } })).toMatchObject({
       status: 'confirmed',
       confirmedAt: expect.any(Date),

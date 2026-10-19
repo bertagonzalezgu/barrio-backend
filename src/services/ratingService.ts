@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma';
-import { Prisma, type ExchangeStatus } from '../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
 import type { InvalidInput } from './chatService';
 import {
@@ -7,15 +7,13 @@ import {
   findParticipation,
   lockCard,
   otherParty,
+  ratingBlocker,
   type ExchangeDetail,
   type ExchangeFailure,
 } from './exchangeService';
 import { parseOptionalText } from './textInput';
 
 const COMMENT_MAX_LENGTH = 500;
-
-// En rated ya han valorado las dos, pero se deja pasar para que quien repite reciba already-rated y no not-confirmed.
-const RATEABLE_STATUSES: ExchangeStatus[] = ['confirmed', 'rated'];
 
 export interface RatingInput {
   score: number;
@@ -52,10 +50,9 @@ export async function rateExchange(firebaseUid: string, exchangeId: string, body
       // lo que dejó guardado la anterior. Es el único bloqueo, así que no hay orden que respetar ni interbloqueo posible.
       await lockCard(tx, parties.cardId);
       const { status } = await tx.exchange.findUniqueOrThrow({ where: { id: exchangeId }, select: { status: true } });
-      if (!RATEABLE_STATUSES.includes(status)) return { ok: false, reason: 'not-confirmed' } as const;
-      if ((await tx.rating.count({ where: { exchangeId, raterId: userId } })) > 0) {
-        return { ok: false, reason: 'already-rated' } as const;
-      }
+      const alreadyRated = (await tx.rating.count({ where: { exchangeId, raterId: userId } })) > 0;
+      const blocker = ratingBlocker(status, alreadyRated);
+      if (blocker) return { ok: false, reason: blocker } as const;
 
       await tx.rating.create({
         data: { exchangeId, raterId: userId, ratedUserId: otherParty(parties, userId), ...input.data },
@@ -75,5 +72,5 @@ export async function rateExchange(firebaseUid: string, exchangeId: string, body
   }
   if (!result.ok) return result;
 
-  return { ok: true, detail: await buildDetail(exchangeId, parties.receiverId === userId) };
+  return { ok: true, detail: await buildDetail(exchangeId, userId) };
 }
