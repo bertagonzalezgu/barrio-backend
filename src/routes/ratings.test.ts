@@ -191,6 +191,34 @@ describe('POST /api/exchanges/:id/rating', () => {
     },
   );
 
+  // confianza.feature — "No se puede valorar dos veces el mismo intercambio"
+  it('si la misma persona valora otra vez devuelve 409 already_rated y no cambia su valoración', async () => {
+    const { exchange } = await setupExchange();
+    await rate(PROPOSER_UID, exchange.id, { score: 5, comment: 'Genial' });
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 1, comment: 'Cambio de opinión' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'already_rated' });
+    expect(await prisma.rating.findMany()).toEqual([expect.objectContaining({ score: 5, comment: 'Genial' })]);
+  });
+
+  it.each([AUTHOR_UID, PROPOSER_UID])('en un intercambio rated devuelve 409 already_rated a %s', async (uid) => {
+    const { author, proposer, exchange } = await setupExchange('rated');
+    await prisma.rating.createMany({
+      data: [
+        { exchangeId: exchange.id, raterId: author.id, ratedUserId: proposer.id, score: 4 },
+        { exchangeId: exchange.id, raterId: proposer.id, ratedUserId: author.id, score: 5 },
+      ],
+    });
+
+    const res = await rate(uid, exchange.id, { score: 3 });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'already_rated' });
+    expect(await prisma.rating.count()).toBe(2);
+  });
+
   it('comprueba el cuerpo antes que el estado: cuerpo inválido en un intercambio sin confirmar da 400', async () => {
     const { exchange } = await setupExchange('accepted');
 

@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma';
-import type { ExchangeStatus } from '../generated/prisma/client';
+import { Prisma, type ExchangeStatus } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
 import type { InvalidInput } from './chatService';
 import {
@@ -45,16 +45,30 @@ export async function rateExchange(firebaseUid: string, exchangeId: string, body
   if (!input.ok) return { ok: false, reason: 'invalid', error: input.error };
 
   const { userId, parties } = participation;
-  const result = await prisma.$transaction(async (tx) => {
-    await lockCard(tx, parties.cardId);
-    const { status } = await tx.exchange.findUniqueOrThrow({ where: { id: exchangeId }, select: { status: true } });
-    if (!RATEABLE_STATUSES.includes(status)) return { ok: false, reason: 'not-confirmed' } as const;
+  let result: { ok: true } | { ok: false; reason: ExchangeFailure };
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      // El mismo bloqueo que confirm: valorar y confirmar del mismo intercambio quedan en fila, y cada una lee
+      // lo que dejó guardado la anterior. Es el único bloqueo, así que no hay orden que respetar ni interbloqueo posible.
+      await lockCard(tx, parties.cardId);
+      const { status } = await tx.exchange.findUniqueOrThrow({ where: { id: exchangeId }, select: { status: true } });
+      if (!RATEABLE_STATUSES.includes(status)) return { ok: false, reason: 'not-confirmed' } as const;
+      if ((await tx.rating.count({ where: { exchangeId, raterId: userId } })) > 0) {
+        return { ok: false, reason: 'already-rated' } as const;
+      }
 
-    await tx.rating.create({
-      data: { exchangeId, raterId: userId, ratedUserId: otherParty(parties, userId), ...input.data },
+      await tx.rating.create({
+        data: { exchangeId, raterId: userId, ratedUserId: otherParty(parties, userId), ...input.data },
+      });
+      return { ok: true } as const;
     });
-    return { ok: true } as const;
-  });
+  } catch (error) {
+    // Red de seguridad del @@unique([exchangeId, raterId]). Se captura fuera: dentro, el error ya ha abortado la transacción.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return { ok: false, reason: 'already-rated' };
+    }
+    throw error;
+  }
   if (!result.ok) return result;
 
   return { ok: true, detail: await buildDetail(exchangeId, parties.receiverId === userId) };
