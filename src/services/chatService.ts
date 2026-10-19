@@ -1,13 +1,14 @@
 import { prisma } from '../config/prisma';
 import type { CardType, ExchangeStatus } from '../generated/prisma/client';
-import type { ParseResult } from './cardService';
 import {
   ACTIVE_STATUSES,
   findParticipation,
   findUserId,
+  otherParty,
   PARTICIPANT_SELECT,
   type ExchangeFailure,
 } from './exchangeService';
+import { parseRequiredText } from './textInput';
 
 export interface ChatMessage {
   id: string;
@@ -43,19 +44,7 @@ export async function listMessages(
   };
 }
 
-// Texto obligatorio, recortado; solo espacios cuenta como vacío.
-function parseRequiredText(body: unknown, field: string, maxLength: number): ParseResult<string> {
-  const value = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)[field] : undefined;
-  if (typeof value !== 'string' || value.trim() === '') {
-    return { ok: false, error: `${field} es obligatorio y debe ser un texto` };
-  }
-  if (value.trim().length > maxLength) {
-    return { ok: false, error: `${field} debe tener ${maxLength} caracteres como máximo` };
-  }
-  return { ok: true, data: value.trim() };
-}
-
-type InvalidInput = { ok: false; reason: 'invalid'; error: string };
+export type InvalidInput = { ok: false; reason: 'invalid'; error: string };
 
 type SendMessageResult = { ok: true; message: ChatMessage } | ChatFailure | InvalidInput;
 
@@ -100,7 +89,7 @@ export async function reportConversation(firebaseUid: string, exchangeId: string
     data: {
       exchangeId,
       reporterId: userId,
-      reportedUserId: userId === parties.proposerId ? parties.receiverId : parties.proposerId,
+      reportedUserId: otherParty(parties, userId),
       reason: reason.data,
     },
     // Respuesta mínima: ni el motivo ni nada de la persona denunciada.

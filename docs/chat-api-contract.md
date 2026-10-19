@@ -1,6 +1,8 @@
-# Contrato de la API del chat interno (tarjetas 13 y 13.b)
+# Contrato de la API del chat interno (tarjetas 13, 13.b y 14)
 
-Comportamiento real de `barrio-backend` tras las tarjetas 13 (chat interno, rama `feature/internal-chat`) y 13.b (bandeja de chats, rama `feature/chats-inbox`). Salvo donde pone *(sin test)*, cada afirmación está cubierta por un test en `src/routes/chat.test.ts`, `src/routes/chatsInbox.test.ts`, `src/routes/exchanges.test.ts`, `src/services/exchangeService.test.ts` o `src/middleware/errorHandler.test.ts`.
+Comportamiento real de `barrio-backend` tras las tarjetas 13 (chat interno, rama `feature/internal-chat`), 13.b (bandeja de chats, rama `feature/chats-inbox`) y 14 (valoraciones, rama `feature/ratings`; aquí solo sus cambios en el detalle). Salvo donde pone *(sin test)*, cada afirmación está cubierta por un test en `src/routes/chat.test.ts`, `src/routes/chatsInbox.test.ts`, `src/routes/exchanges.test.ts`, `src/routes/ratings.test.ts`, `src/services/exchangeService.test.ts` o `src/middleware/errorHandler.test.ts`.
+
+El endpoint para valorar (`POST /:id/rating`) y el perfil público están en [`ratings-api-contract.md`](./ratings-api-contract.md).
 
 ## Convenciones comunes
 
@@ -66,7 +68,7 @@ Todos los intercambios de quien pregunta, como proponente o como receptora, para
 | `lastMessage` | El mensaje más reciente del intercambio, o `null` si no hay ninguno. `text` va completo (el frontend lo recorta); `mine` es `true` si lo envió quien pregunta. No incluye quién lo envió. |
 | `lastActivityAt` | Lo más reciente entre el último cambio del intercambio (`updatedAt`) y `lastMessage.sentAt`. Enviar un mensaje no cambia el intercambio, por eso se combinan las dos fechas. Sin mensajes, es el último cambio. |
 
-**Qué cuenta como "último cambio":** cualquier escritura sobre el intercambio. Hoy son las transiciones: aceptar, rechazar, cancelar y confirmar (probado con cancelar; las demás escriben igual sobre el intercambio *(sin test en la bandeja)*). Denunciar la conversación no lo cambia.
+**Qué cuenta como "último cambio":** cualquier escritura sobre el intercambio. Hoy son las transiciones: aceptar, rechazar, cancelar, confirmar y la segunda valoración, la que lo pasa a `rated` (probado con cancelar; las demás escriben igual sobre el intercambio *(sin test en la bandeja)*). Denunciar la conversación no lo cambia. La primera valoración tampoco, porque solo crea la valoración y no toca el intercambio *(sin test en la bandeja)*.
 
 **Orden:** `lastActivityAt` de más reciente a más antigua. Con la misma `lastActivityAt`, por `id` ascendente, así que el orden es siempre el mismo.
 
@@ -95,6 +97,7 @@ Lo necesario para pintar la cabecera del chat y sus botones. Funciona en cualqui
   "other": { "id": "0d9c8b7a-6f5e-4d3c-2b1a-0f9e8d7c6b5a", "name": "Ana", "avatar": "" },
   "myConfirmed": false,
   "otherConfirmed": false,
+  "myRating": null,
   "actions": ["cancel", "confirm"]
 }
 ```
@@ -104,17 +107,18 @@ Lo necesario para pintar la cabecera del chat y sus botones. Funciona en cualqui
 | Campo | Significado |
 |---|---|
 | `id` | Id del intercambio, que es también el id del chat. |
-| `status` | `proposed`, `accepted`, `done`, `confirmed`, `rated`, `cancelled` o `rejected` (`pending` existe en el schema pero no se usa). |
+| `status` | `proposed`, `accepted`, `done`, `confirmed`, `rated`, `cancelled` o `rejected` (`pending` existe en el schema pero no se usa). `confirmed`: las dos han confirmado. `rated`: además, las dos han valorado; con una sola valoración sigue en `confirmed`. |
 | `hours` | Horas del intercambio, fijadas al proponer. Son las que se transfieren al confirmar, aunque la card cambie después. |
 | `card` | `id`, `title` y `type` (`offer` o `request`) de la card. Sale aunque la card esté `completed`, `reported` o `deleted`. |
 | `other` | La otra persona del intercambio, vista desde quien pregunta: `id`, `name` y `avatar` (`""` si no tiene). |
 | `myConfirmed` | `true` si quien pregunta ya ha confirmado que el intercambio se hizo. |
 | `otherConfirmed` | `true` si la otra persona ya ha confirmado. |
+| `myRating` | La valoración que quien pregunta ha dado en este intercambio, `{ "score": 4, "comment": "Muy puntual" }` (`comment` puede ser `null`), o `null` si todavía no ha valorado. Solo sale la propia: la de la otra persona no aparece, aunque ya haya valorado. |
 | `actions` | Acciones que quien pregunta puede hacer ahora. Ver abajo. |
 
 ### Cómo se compone `actions`
 
-El backend calcula la lista con las mismas reglas que aplica cuando se ejecuta cada acción, así que el frontend no tiene que repetirlas. Siempre sale en este orden: `accept`, `reject`, `cancel`, `confirm`.
+El backend calcula la lista con las mismas reglas que aplica cuando se ejecuta cada acción, así que el frontend no tiene que repetirlas. Siempre sale en este orden: `accept`, `reject`, `cancel`, `confirm`, `rate`.
 
 | Acción | Aparece si… | Endpoint |
 |---|---|---|
@@ -122,22 +126,27 @@ El backend calcula la lista con las mismas reglas que aplica cuando se ejecuta c
 | `reject` | Estado `proposed` y pregunta la autora. | `PATCH /:id/reject` |
 | `cancel` | Estado `proposed` o `accepted`, pregunte quien pregunte de las dos. | `PATCH /:id/cancel` |
 | `confirm` | Estado `accepted` o `done` y quien pregunta todavía no ha confirmado. | `PATCH /:id/confirm` |
+| `rate` | Estado `confirmed` y quien pregunta todavía no ha valorado (`myRating` es `null`). | `POST /:id/rating` |
 
 Resultado por estado y rol:
 
-| Estado | Ya confirmó | Autora (receptora) | Proponente |
+| Estado | Ya confirmó / valoró | Autora (receptora) | Proponente |
 |---|---|---|---|
 | `proposed` | — | `accept`, `reject`, `cancel` | `cancel` |
 | `proposed`, card no disponible | — | `reject`, `cancel` | `cancel` |
 | `accepted` | nadie | `cancel`, `confirm` | `cancel`, `confirm` |
 | `done` | la proponente | `confirm` | (ninguna) |
 | `done` | la autora | (ninguna) | `confirm` |
-| `confirmed`, `rated` | las dos | (ninguna) | (ninguna) |
+| `confirmed` | confirmaron las dos; nadie ha valorado | `rate` | `rate` |
+| `confirmed` | confirmaron las dos; valoró la proponente | `rate` | (ninguna) |
+| `confirmed` | confirmaron las dos; valoró la autora *(sin test este orden; el contrario sí)* | (ninguna) | `rate` |
+| `rated` | confirmaron y valoraron las dos | (ninguna) | (ninguna) |
 | `cancelled`, `rejected` | — | (ninguna) | (ninguna) |
 
 "Card no disponible" es cuando ya no está `active` o cuando otro intercambio de la misma card ya está `accepted` o `done`.
 
 - **El saldo no entra en `actions`:** `accept` puede aparecer y aun así fallar con `409 insufficient_balance` si la pagadora no tiene horas disponibles. *(sin test que combine las dos cosas; cada una por separado sí lo tiene)*
+- **Valorar es opcional:** mientras no se valore, el intercambio se queda en `confirmed` y todo lo demás funciona igual.
 - **Las rutas `accept`, `reject` y `cancel` no han cambiado:** responden con el `Exchange` en crudo, no con este detalle. Tras usarlas, vuelve a pedir `GET /:id`.
 
 **Errores propios:** ninguno, aparte de los comunes.
@@ -216,7 +225,8 @@ Si las dos confirman a la vez, el resultado es el mismo que una tras otra: `conf
   "other": { "id": "0d9c8b7a-6f5e-4d3c-2b1a-0f9e8d7c6b5a", "name": "Ana", "avatar": "" },
   "myConfirmed": true,
   "otherConfirmed": true,
-  "actions": []
+  "myRating": null,
+  "actions": ["rate"]
 }
 ```
 

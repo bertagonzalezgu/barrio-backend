@@ -16,7 +16,9 @@ export type ExchangeFailure =
   | 'forbidden'
   | 'invalid-transition'
   | 'chat-closed'
-  | 'already-confirmed';
+  | 'already-confirmed'
+  | 'not-confirmed'
+  | 'already-rated';
 
 type ExchangeResult = { ok: true; exchange: Exchange } | { ok: false; reason: ExchangeFailure };
 
@@ -43,7 +45,7 @@ export async function findUserId(firebaseUid: string): Promise<string | null> {
 
 // Bloquea la fila hasta el final de la transacción: cualquier otra operación sobre la misma card espera su turno,
 // y al continuar lee el estado ya confirmado por la anterior (READ COMMITTED toma una foto nueva por consulta).
-async function lockCard(tx: Tx, cardId: string): Promise<void> {
+export async function lockCard(tx: Tx, cardId: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM "Card" WHERE id = ${cardId} FOR UPDATE`;
 }
 
@@ -153,6 +155,10 @@ interface Parties {
   receiverId: string;
 }
 
+export function otherParty(parties: Parties, userId: string): string {
+  return userId === parties.proposerId ? parties.receiverId : parties.proposerId;
+}
+
 export type ParticipationResult =
   | { ok: true; userId: string; parties: Parties }
   | { ok: false; reason: 'user-not-found' | 'exchange-not-found' };
@@ -236,6 +242,7 @@ export interface ExchangeDetail {
   other: { id: string; name: string; avatar: string };
   myConfirmed: boolean;
   otherConfirmed: boolean;
+  myRating: { score: number; comment: string | null } | null;
   actions: ChatAction[];
 }
 
@@ -244,7 +251,16 @@ type ExchangeDetailResult = { ok: true; detail: ExchangeDetail } | { ok: false; 
 // Cada persona confirma por su lado; el intercambio no se da por hecho hasta que lo dicen las dos.
 const CONFIRMABLE_STATUSES: ExchangeStatus[] = ['accepted', 'done'];
 
-export type ChatAction = ExchangeAction | 'confirm';
+// rate no es una transición de TRANSITIONS: valorar solo pasa a rated cuando ya han valorado las dos.
+export type ChatAction = ExchangeAction | 'confirm' | 'rate';
+
+// Regla única para valorar: la aplica rateExchange al ejecutar y availableActions para ofrecer rate.
+// En rated ya han valorado las dos, así que quien lo intenta recibe already-rated y no not-confirmed.
+export function ratingBlocker(status: ExchangeStatus, alreadyRated: boolean): 'not-confirmed' | 'already-rated' | null {
+  if (status === 'rated') return 'already-rated';
+  if (status !== 'confirmed') return 'not-confirmed';
+  return alreadyRated ? 'already-rated' : null;
+}
 
 // Las acciones salen de la misma tabla TRANSITIONS que aplica transitionExchange, para que el frontend no repita reglas.
 // accept solo se ofrece si de verdad podría salir bien: la card sigue libre. El saldo se comprueba al aceptar.
@@ -252,6 +268,7 @@ async function availableActions(
   status: ExchangeStatus,
   isReceiver: boolean,
   myConfirmed: boolean,
+  myRated: boolean,
   card: { id: string; status: CardStatus },
 ): Promise<ChatAction[]> {
   const actions: ChatAction[] = EXCHANGE_ACTIONS.filter((action) => {
@@ -259,6 +276,7 @@ async function availableActions(
     return rule.from.includes(status) && canAct(rule, isReceiver);
   });
   if (CONFIRMABLE_STATUSES.includes(status) && !myConfirmed) actions.push('confirm');
+  if (ratingBlocker(status, myRated) === null) actions.push('rate');
   if (actions.includes('accept') && !(await isCardAvailable(prisma, card))) {
     return actions.filter((action) => action !== 'accept');
   }
@@ -268,10 +286,11 @@ async function availableActions(
 export async function getExchangeDetail(firebaseUid: string, exchangeId: string): Promise<ExchangeDetailResult> {
   const participation = await findParticipation(firebaseUid, exchangeId);
   if (!participation.ok) return participation;
-  return { ok: true, detail: await buildDetail(exchangeId, participation.parties.receiverId === participation.userId) };
+  return { ok: true, detail: await buildDetail(exchangeId, participation.userId) };
 }
 
-async function buildDetail(exchangeId: string, isReceiver: boolean): Promise<ExchangeDetail> {
+// userId es una de las dos participantes: quien llama ya lo ha comprobado con findParticipation.
+export async function buildDetail(exchangeId: string, userId: string): Promise<ExchangeDetail> {
   const exchange = await prisma.exchange.findUniqueOrThrow({
     where: { id: exchangeId },
     select: {
@@ -283,9 +302,13 @@ async function buildDetail(exchangeId: string, isReceiver: boolean): Promise<Exc
       card: { select: { id: true, title: true, type: true, status: true } },
       proposer: { select: PARTICIPANT_SELECT },
       receiver: { select: PARTICIPANT_SELECT },
+      // Como mucho una, por el @@unique([exchangeId, raterId]).
+      ratings: { where: { raterId: userId }, select: { score: true, comment: true } },
     },
   });
 
+  const isReceiver = exchange.receiver.id === userId;
+  const myRating = exchange.ratings[0] ?? null;
   const { status: cardStatus, ...card } = exchange.card;
   const [myConfirmedAt, otherConfirmedAt] = isReceiver
     ? [exchange.receiverConfirmedAt, exchange.proposerConfirmedAt]
@@ -299,7 +322,11 @@ async function buildDetail(exchangeId: string, isReceiver: boolean): Promise<Exc
     other: isReceiver ? exchange.proposer : exchange.receiver,
     myConfirmed: myConfirmedAt !== null,
     otherConfirmed: otherConfirmedAt !== null,
-    actions: await availableActions(exchange.status, isReceiver, myConfirmedAt !== null, { id: card.id, status: cardStatus }),
+    myRating,
+    actions: await availableActions(exchange.status, isReceiver, myConfirmedAt !== null, myRating !== null, {
+      id: card.id,
+      status: cardStatus,
+    }),
   };
 }
 
@@ -309,8 +336,7 @@ async function createTransfer(tx: Tx, exchangeId: string, fromUserId: string, pa
   if ((await tx.timeTransaction.count({ where: { exchangeId, type: 'transfer' } })) > 0) {
     throw new Error(`El intercambio ${exchangeId} ya tiene una transferencia`);
   }
-  const toUserId = fromUserId === parties.proposerId ? parties.receiverId : parties.proposerId;
-  await tx.timeTransaction.create({ data: { type: 'transfer', exchangeId, fromUserId, toUserId, hours } });
+  await tx.timeTransaction.create({ data: { type: 'transfer', exchangeId, fromUserId, toUserId: otherParty(parties, fromUserId), hours } });
 }
 
 function myConfirmation(isReceiver: boolean, at: Date): Prisma.ExchangeUpdateInput {
@@ -352,5 +378,5 @@ export async function confirmExchange(firebaseUid: string, exchangeId: string): 
   });
   if (!result.ok) return result;
 
-  return { ok: true, detail: await buildDetail(exchangeId, isReceiver) };
+  return { ok: true, detail: await buildDetail(exchangeId, userId) };
 }

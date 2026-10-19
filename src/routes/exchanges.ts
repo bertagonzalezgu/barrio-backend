@@ -9,6 +9,7 @@ import {
   patchExchange,
   postExchange,
   postMessage,
+  postRating,
   postReport,
 } from '../controllers/exchangeController';
 
@@ -25,5 +26,6 @@ router.patch('/:id/reject', verifyToken, patchExchange('reject'));
 router.patch('/:id/cancel', verifyToken, patchExchange('cancel'));
 router.patch('/:id/confirm', verifyToken, patchConfirm);
 router.post('/:id/report', verifyToken, postReport);
+router.post('/:id/rating', verifyToken, postRating);
 
 export default router;

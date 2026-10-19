@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { getUserName, registerUser } from '../services/userService';
+import { getPublicProfile, getUserName, registerUser } from '../services/userService';
 
 export async function registerCurrentUser(req: Request, res: Response): Promise<void> {
   if (!req.user) {
@@ -43,4 +43,24 @@ export async function getCurrentUser(req: Request, res: Response): Promise<void>
   }
 
   res.json({ name });
+}
+
+const PROFILE_ERRORS = {
+  'user-not-found': 'Usuario no registrado',
+  'profile-not-found': 'Usuario no encontrado',
+} as const;
+
+export async function getUserProfile(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await getPublicProfile(req.user.uid, req.params.id);
+  if (!result.ok) {
+    res.status(404).json({ error: PROFILE_ERRORS[result.reason] });
+    return;
+  }
+
+  res.json(result.profile);
 }

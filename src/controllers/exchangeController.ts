@@ -10,6 +10,7 @@ import {
   parseCreateExchangeInput,
   type ExchangeFailure,
 } from '../services/exchangeService';
+import { rateExchange } from '../services/ratingService';
 
 const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }> = {
   'user-not-found': { status: 404, error: 'Usuario no registrado' },
@@ -23,6 +24,8 @@ const EXCHANGE_ERRORS: Record<ExchangeFailure, { status: number; error: string }
   'invalid-transition': { status: 409, error: 'invalid_transition' },
   'chat-closed': { status: 409, error: 'chat_closed' },
   'already-confirmed': { status: 409, error: 'already_confirmed' },
+  'not-confirmed': { status: 409, error: 'not_confirmed' },
+  'already-rated': { status: 409, error: 'already_rated' },
 };
 
 function sendFailure(res: Response, reason: ExchangeFailure): void {
@@ -166,6 +169,26 @@ export async function postReport(req: Request<{ id: string }>, res: Response): P
   }
 
   res.status(201).json(result.report);
+}
+
+// Como postMessage: el body se valida después de comprobar la participación.
+export async function postRating(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const result = await rateExchange(req.user.uid, req.params.id, req.body);
+  if (!result.ok) {
+    if (result.reason === 'invalid') {
+      res.status(400).json({ error: result.error });
+      return;
+    }
+    sendFailure(res, result.reason);
+    return;
+  }
+
+  res.status(201).json(result.detail);
 }
 
 export async function getChats(req: Request, res: Response): Promise<void> {

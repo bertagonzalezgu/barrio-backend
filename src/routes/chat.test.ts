@@ -92,6 +92,7 @@ describe('GET /api/exchanges/:id', () => {
       other: { id: other.id, name: other.name, avatar: '' },
       myConfirmed: false,
       otherConfirmed: false,
+      myRating: null,
       actions: expect.any(Array),
     });
   });
@@ -128,7 +129,8 @@ describe('GET /api/exchanges/:id', () => {
   });
 
   describe('actions', () => {
-    // done siempre lleva exactamente una confirmación; confirmed y rated, las dos.
+    // done siempre lleva exactamente una confirmación; confirmed y rated, las dos. Aquí nadie ha valorado todavía:
+    // rate tras valorar se prueba en ratings.test.ts.
     it.each([
       ['proposed', [], AUTHOR_UID, ['accept', 'reject', 'cancel']],
       ['proposed', [], PROPOSER_UID, ['cancel']],
@@ -138,8 +140,8 @@ describe('GET /api/exchanges/:id', () => {
       ['done', ['proposer'], PROPOSER_UID, []],
       ['done', ['receiver'], AUTHOR_UID, []],
       ['done', ['receiver'], PROPOSER_UID, ['confirm']],
-      ['confirmed', ['proposer', 'receiver'], AUTHOR_UID, []],
-      ['confirmed', ['proposer', 'receiver'], PROPOSER_UID, []],
+      ['confirmed', ['proposer', 'receiver'], AUTHOR_UID, ['rate']],
+      ['confirmed', ['proposer', 'receiver'], PROPOSER_UID, ['rate']],
       ['rated', ['proposer', 'receiver'], AUTHOR_UID, []],
       ['cancelled', [], AUTHOR_UID, []],
       ['rejected', [], PROPOSER_UID, []],
@@ -470,6 +472,10 @@ describe('POST /api/exchanges/:id/report', () => {
   });
 });
 
+function rate(uid: string, exchangeId: string, body: Record<string, unknown>) {
+  return request(app).post(`/api/exchanges/${exchangeId}/rating`).set('Authorization', `Bearer ${uid}`).send(body);
+}
+
 // chat.feature — "El teléfono no se comparte por defecto"
 describe('privacidad del chat', () => {
   const CONTACT_KEY = /mail|phone|tel[eé]fono|m[oó]vil|mobile|whatsapp/i;
@@ -520,6 +526,36 @@ describe('privacidad del chat', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('confirmed');
     expectNoContactData(res.body, [author.email, proposer.email]);
+  });
+
+  // Valorar exige confirmed: se prueba la primera valoración y la que pasa el intercambio a rated.
+  it.each([
+    ['primera', AUTHOR_UID],
+    ['primera', PROPOSER_UID],
+    ['segunda', AUTHOR_UID],
+    ['segunda', PROPOSER_UID],
+  ] as const)('POST /:id/rating (%s valoración) no expone datos de contacto a %s', async (which, uid) => {
+    const { author, proposer, exchange } = await setupExchange({ status: 'confirmed', confirmedBy: ['proposer', 'receiver'] });
+    if (which === 'segunda') {
+      const other = uid === AUTHOR_UID ? PROPOSER_UID : AUTHOR_UID;
+      expect((await rate(other, exchange.id, { score: 5, comment: `Escríbeme a ${author.email}` })).status).toBe(201);
+    }
+
+    const res = await rate(uid, exchange.id, { score: 4, comment: 'Muy puntual' });
+
+    expect(res.status).toBe(201);
+    expectNoContactData(res.body, [author.email, proposer.email]);
+  });
+
+  it('GET /api/users/:id no expone datos de contacto ni comentarios de la persona del perfil', async () => {
+    const { author, proposer, exchange } = await setupExchange({ status: 'confirmed', confirmedBy: ['proposer', 'receiver'] });
+    await rate(PROPOSER_UID, exchange.id, { score: 5, comment: `Escríbeme a ${proposer.email}` });
+
+    const res = await request(app).get(`/api/users/${author.id}`).set('Authorization', `Bearer ${PROPOSER_UID}`);
+
+    expect(res.status).toBe(200);
+    expectNoContactData(res.body, [author.email, proposer.email]);
+    expect(collectEntries(res.body).map(({ key }) => key)).not.toContain('firebaseUid');
   });
 
   function expectNoContactData(body: unknown, emails: string[]): void {
