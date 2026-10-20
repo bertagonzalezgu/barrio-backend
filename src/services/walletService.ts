@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma';
-import { Prisma, type CardType, type ExchangeStatus } from '../generated/prisma/client';
+import { Prisma, type CardCategory, type CardType, type ExchangeStatus } from '../generated/prisma/client';
 
 export const WELCOME_CREDIT_HOURS = 2;
 
@@ -81,4 +81,55 @@ export async function getBalanceByUserId(userId: string, db: Prisma.TransactionC
         WHERE e.status IN (${reservingStatuses}) AND (${paidBySql(userId)})) AS reserved
   `;
   return toBalance(row);
+}
+
+export interface TransactionItem {
+  id: string;
+  kind: 'welcome' | 'exchange';
+  direction: 'in' | 'out';
+  hours: number;
+  date: Date;
+  exchangeId: string | null;
+  card: { id: string; title: string; type: CardType; category: CardCategory } | null;
+  other: { id: string; name: string; avatar: string } | null;
+}
+
+// Sin paginación todavía: el tope evita respuestas sin límite. Se documenta como limitación del contrato.
+const TRANSACTION_HISTORY_LIMIT = 100;
+
+// Lo mismo que PARTICIPANT_SELECT de exchangeService; no se importa porque exchangeService ya depende de este módulo.
+const OTHER_PARTY_SELECT = { id: true, name: true, avatar: true } as const;
+
+// Una sola consulta: la otra persona y la card salen con join. hours va siempre en positivo; el signo es direction.
+export async function getTransactions(firebaseUid: string): Promise<TransactionItem[] | null> {
+  const user = await prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } });
+  if (!user) return null;
+
+  const rows = await prisma.timeTransaction.findMany({
+    where: { type: 'transfer', OR: [{ fromUserId: user.id }, { toUserId: user.id }] },
+    orderBy: [{ date: 'desc' }, { id: 'asc' }],
+    take: TRANSACTION_HISTORY_LIMIT,
+    select: {
+      id: true,
+      hours: true,
+      date: true,
+      exchangeId: true,
+      toUserId: true,
+      fromUser: { select: OTHER_PARTY_SELECT },
+      toUser: { select: OTHER_PARTY_SELECT },
+      exchange: { select: { card: { select: { id: true, title: true, type: true, category: true } } } },
+    },
+  });
+
+  return rows.map(({ toUserId, fromUser, toUser, exchange, ...row }) => {
+    const direction = toUserId === user.id ? 'in' : 'out';
+    return {
+      ...row,
+      // Sin intercambio solo existe el regalo de bienvenida, que no viene de nadie.
+      kind: row.exchangeId === null ? 'welcome' : 'exchange',
+      direction,
+      card: exchange?.card ?? null,
+      other: direction === 'in' ? fromUser : toUser,
+    };
+  });
 }

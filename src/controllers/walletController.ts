@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { getBalance } from '../services/walletService';
+import { getBalance, getTransactions } from '../services/walletService';
 
 export async function getWalletBalance(req: Request, res: Response): Promise<void> {
   if (!req.user) {
@@ -14,4 +14,19 @@ export async function getWalletBalance(req: Request, res: Response): Promise<voi
   }
 
   res.json(balance);
+}
+
+export async function getWalletTransactions(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const items = await getTransactions(req.user.uid);
+  if (items === null) {
+    res.status(404).json({ error: 'Usuario no registrado' });
+    return;
+  }
+
+  res.json({ items });
 }
