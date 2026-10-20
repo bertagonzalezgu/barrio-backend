@@ -111,7 +111,7 @@ No hay más campos: ni email, ni `firebaseUid`, ni comentarios, ni saldo.
 
 Además de los comunes: `401` sin token y `404 Usuario no registrado` si quien pregunta no está registrada.
 
-**`/me` no es un id:** `GET /api/users/me` y `POST /api/users/me` siguen respondiendo como antes. La ruta del perfil está registrada después.
+**`/me` no es un id:** la ruta del perfil está registrada después de `/me`, así que `GET /api/users/me` nunca se interpreta como el perfil de una usuaria con id `me`. Desde la tarjeta 15, `GET /api/users/me` devuelve mi perfil con esta misma forma, y hay también `PATCH /api/users/me`: ver [`profile-api-contract.md`](./profile-api-contract.md).
 
 ## Cambios en `POST /api/users/me`
 
