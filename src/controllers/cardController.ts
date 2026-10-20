@@ -7,6 +7,7 @@ import {
   parseCardFilters,
   parseCreateCardInput,
   parseUpdateCardInput,
+  toCardResponse,
   updateCard,
 } from '../services/cardService';
 import { generateCardWithAI, moderateContent, parseGenerateCardInput } from '../services/aiCardService';
@@ -44,17 +45,23 @@ export async function postCard(req: Request, res: Response): Promise<void> {
     return;
   }
 
-  res.status(201).json(result.card);
+  res.status(201).json(toCardResponse(result.card, req.user.uid));
 }
 
 export async function getCards(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
   const filters = parseCardFilters(req.query);
   if (!filters.ok) {
     res.status(400).json({ error: filters.error });
     return;
   }
 
-  res.json(await listActiveCards(filters.data));
+  const { uid } = req.user;
+  res.json((await listActiveCards(filters.data)).map((card) => toCardResponse(card, uid)));
 }
 
 export async function generateCard(req: Request, res: Response): Promise<void> {
@@ -78,13 +85,18 @@ export async function generateCard(req: Request, res: Response): Promise<void> {
 }
 
 export async function getCardById(req: Request<{ id: string }>, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
   const card = await findCardById(req.params.id);
   if (!card) {
     res.status(404).json({ error: 'Card not found' });
     return;
   }
 
-  res.json(card);
+  res.json(toCardResponse(card, req.user.uid));
 }
 
 const DELETE_ERRORS = {
@@ -153,5 +165,5 @@ export async function patchCard(req: Request<{ id: string }>, res: Response): Pr
     return;
   }
 
-  res.json(result.card);
+  res.json(toCardResponse(result.card, req.user.uid));
 }

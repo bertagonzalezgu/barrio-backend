@@ -293,12 +293,7 @@ describe('GET /api/cards', () => {
 
     expect(res.status).toBe(200);
     for (const card of res.body) {
-      expect(card.author).toEqual({
-        id: card.authorId,
-        name: 'Autora',
-        email: 'autora@barrio.local',
-        firebaseUid: AUTHOR_UID,
-      });
+      expect(card.author).toEqual({ id: card.authorId, name: 'Autora', avatar: '' });
     }
   });
 
@@ -349,12 +344,7 @@ describe('GET /api/cards/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ...requiredFields, id: card.id, authorId: author.id });
-    expect(res.body.author).toEqual({
-      id: author.id,
-      name: 'Autora',
-      email: 'autora@barrio.local',
-      firebaseUid: AUTHOR_UID,
-    });
+    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', avatar: '' });
   });
 
   it('devuelve 404 si la card no existe', async () => {
@@ -486,7 +476,7 @@ describe('PATCH /api/cards/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ...changes, id: card.id, type: 'request' });
-    expect(res.body.author).toMatchObject({ firebaseUid: AUTHOR_UID });
+    expect(res.body.author).toEqual({ id: card.authorId, name: 'Autora', avatar: '' });
     expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject(changes);
   });
 
@@ -673,5 +663,90 @@ describe('PATCH /api/cards/:id', () => {
     await patchCardAs(AUTHOR_UID, card.id, { hours: 4 });
 
     expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+});
+
+// La autora de una card solo se ve con id, name y avatar; isMine sustituye a comparar con su firebaseUid en el frontend.
+describe('author e isMine en las respuestas de cards', () => {
+  const OTHER_UID = 'uid-otra';
+
+  function as(uid: string) {
+    mockVerifyIdToken.mockResolvedValueOnce({ uid } as never);
+    return `Bearer ${uid}`;
+  }
+
+  async function seed() {
+    const author = await createAuthor();
+    await prisma.user.create({ data: { firebaseUid: OTHER_UID, name: 'Otra', email: 'otra@barrio.local' } });
+    const card = await prisma.card.create({ data: { ...requiredFields, authorId: author.id } });
+    return { author, card };
+  }
+
+  // Todo el JSON, no solo author: ni claves ni valores de contacto o de Firebase, por anidados que estén.
+  function expectNoPrivateData(body: unknown): void {
+    const json = JSON.stringify(body);
+    for (const leak of ['"email"', '"firebaseUid"', 'autora@barrio.local', AUTHOR_UID, 'otra@barrio.local', OTHER_UID]) {
+      expect(json).not.toContain(leak);
+    }
+  }
+
+  it.each([
+    [AUTHOR_UID, true],
+    [OTHER_UID, false],
+  ])('en el listado, %s ve isMine %s y un author mínimo', async (uid, isMine) => {
+    const { author } = await seed();
+
+    const res = await request(app).get('/api/cards').set('Authorization', as(uid));
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].author).toEqual({ id: author.id, name: 'Autora', avatar: '' });
+    expect(res.body[0].isMine).toBe(isMine);
+    expectNoPrivateData(res.body);
+  });
+
+  it.each([
+    [AUTHOR_UID, true],
+    [OTHER_UID, false],
+  ])('en el detalle, %s ve isMine %s y un author mínimo', async (uid, isMine) => {
+    const { author, card } = await seed();
+
+    const res = await request(app).get(`/api/cards/${card.id}`).set('Authorization', as(uid));
+
+    expect(res.status).toBe(200);
+    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', avatar: '' });
+    expect(res.body.isMine).toBe(isMine);
+    expectNoPrivateData(res.body);
+  });
+
+  it('al crear, la respuesta trae el author mínimo e isMine true', async () => {
+    const author = await createAuthor();
+
+    const res = await postCardAs(requiredFields);
+
+    expect(res.status).toBe(201);
+    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', avatar: '' });
+    expect(res.body.isMine).toBe(true);
+    expectNoPrivateData(res.body);
+  });
+
+  it('al editar, la respuesta trae el author mínimo e isMine true', async () => {
+    const { author, card } = await seed();
+
+    const res = await request(app).patch(`/api/cards/${card.id}`).set('Authorization', as(AUTHOR_UID)).send({ hours: 4 });
+
+    expect(res.status).toBe(200);
+    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', avatar: '' });
+    expect(res.body.isMine).toBe(true);
+    expectNoPrivateData(res.body);
+  });
+
+  it('el avatar de la autora sale tal cual', async () => {
+    const { author, card } = await seed();
+    await prisma.user.update({ where: { id: author.id }, data: { avatar: 'https://img/autora.png' } });
+
+    const res = await request(app).get(`/api/cards/${card.id}`).set('Authorization', as(OTHER_UID));
+
+    expect(res.body.author.avatar).toBe('https://img/autora.png');
   });
 });

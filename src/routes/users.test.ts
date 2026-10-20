@@ -182,8 +182,18 @@ describe('GET /api/users/:id', () => {
       ratingAverage: 5,
       ratingCount: 1,
       exchangeCount: 1,
+      createdAt: ana.registeredAt.toISOString(),
     });
     expect(JSON.stringify(res.body)).not.toContain('Secreto');
+  });
+
+  it('createdAt es la fecha de registro en ISO 8601', async () => {
+    const ana = await createUser('uid-ana');
+
+    const { createdAt } = (await getProfile('uid-ana', ana.id)).body;
+
+    expect(createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(new Date(createdAt).getTime()).toBe(ana.registeredAt.getTime());
   });
 
   it('sin valoraciones, ratingAverage es null (nunca 0) y los contadores son 0', async () => {
