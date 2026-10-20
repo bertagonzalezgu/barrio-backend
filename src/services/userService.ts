@@ -46,6 +46,7 @@ export interface PublicProfile {
   ratingAverage: number | null;
   ratingCount: number;
   exchangeCount: number;
+  createdAt: Date;
 }
 
 type PublicProfileResult = { ok: true; profile: PublicProfile } | { ok: false; reason: 'user-not-found' | 'profile-not-found' };
@@ -54,15 +55,17 @@ type PublicProfileResult = { ok: true; profile: PublicProfile } | { ok: false; r
 const COMPLETED_STATUSES: ExchangeStatus[] = ['confirmed', 'rated'];
 
 // Select explícito: del perfil de otra persona nunca sale su email, su firebaseUid ni nada del wallet.
-const PUBLIC_PROFILE_SELECT = { id: true, name: true, avatar: true, verified: true } as const;
+const PUBLIC_PROFILE_SELECT = { id: true, name: true, avatar: true, verified: true, registeredAt: true } as const;
 
 // La media no se guarda: se calcula al leer, igual que el saldo sale de TimeTransaction.
 // Así nunca puede quedar desfasada respecto a las valoraciones que hay de verdad.
 export async function getPublicProfile(firebaseUid: string, userId: string): Promise<PublicProfileResult> {
   if (!(await findUserId(firebaseUid))) return { ok: false, reason: 'user-not-found' };
 
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: PUBLIC_PROFILE_SELECT });
-  if (!user) return { ok: false, reason: 'profile-not-found' };
+  const found = await prisma.user.findUnique({ where: { id: userId }, select: PUBLIC_PROFILE_SELECT });
+  if (!found) return { ok: false, reason: 'profile-not-found' };
+  // En la API se llama createdAt, como en el resto de recursos; la columna es registeredAt.
+  const { registeredAt, ...user } = found;
 
   const [ratings, exchangeCount] = await Promise.all([
     prisma.rating.aggregate({ where: { ratedUserId: userId }, _avg: { score: true }, _count: true }),
@@ -80,6 +83,7 @@ export async function getPublicProfile(firebaseUid: string, userId: string): Pro
       ratingAverage: average === null ? null : Math.round(average * 10) / 10,
       ratingCount: ratings._count,
       exchangeCount,
+      createdAt: registeredAt,
     },
   };
 }

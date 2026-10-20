@@ -69,7 +69,7 @@ Dentro del 409 va primero `not_confirmed` y después `already_rated`. Con un cue
 
 ## `GET /api/users/:id`: perfil público mínimo
 
-Lo que cualquier usuaria registrada puede ver de otra (o de sí misma): datos básicos, la valoración media y cuántos intercambios ha completado.
+Lo que cualquier usuaria registrada puede ver de otra (o de sí misma): datos básicos, la valoración media, cuántos intercambios ha completado y desde cuándo está en barrio.
 
 **Petición:** sin cuerpo. `:id` es el `id` de la usuaria (el mismo que sale en `other.id` del chat), no su `firebaseUid`.
 
@@ -83,7 +83,8 @@ Lo que cualquier usuaria registrada puede ver de otra (o de sí misma): datos b�
   "verified": true,
   "ratingAverage": 4.8,
   "ratingCount": 5,
-  "exchangeCount": 7
+  "exchangeCount": 7,
+  "createdAt": "2026-09-29T15:27:03.000Z"
 }
 ```
 
@@ -96,6 +97,7 @@ Lo que cualquier usuaria registrada puede ver de otra (o de sí misma): datos b�
 | `ratingAverage` | Media de las puntuaciones que ha **recibido**, redondeada a un decimal (`4.33` → `4.3`, `4.67` → `4.7`). `null` si no ha recibido ninguna; nunca `0`. |
 | `ratingCount` | Número de valoraciones recibidas. Las que ella ha dado no cuentan. |
 | `exchangeCount` | Intercambios `confirmed` o `rated` en los que participa, como proponente o como autora de la card. No cuentan `proposed`, `accepted`, `done`, `cancelled` ni `rejected`. |
+| `createdAt` | Fecha de registro en barrio, ISO 8601 en UTC. Sirve para mostrar la antigüedad ("en barrio desde…"). En la base de datos es la columna `User.registeredAt`. |
 
 No hay más campos: ni email, ni `firebaseUid`, ni comentarios, ni saldo.
 
