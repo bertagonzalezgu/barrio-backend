@@ -543,3 +543,43 @@ describe('PATCH /api/users/me', () => {
     expect(mockGroqCreate).not.toHaveBeenCalled();
   });
 });
+
+// perfil.feature — "Editar mi avatar y nombre": el nuevo nombre se refleja en mis tarjetas y en el chat.
+describe('PATCH /api/users/me — el nombre nuevo se ve en cards y chats', () => {
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+    mockVerifyIdToken.mockImplementation(async (token: string) => ({ uid: token }));
+    mockGroqCreate.mockReset();
+    mockGroqCreate.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ seguro: true, motivo: 'ok' }) } }] });
+  });
+
+  function get(uid: string, path: string) {
+    return request(app).get(path).set('Authorization', `Bearer ${uid}`);
+  }
+
+  // Lo que ven las demás del nombre de la autora: en sus cards (listado y detalle) y en el chat (detalle y bandeja).
+  async function namesSeenBy(uid: string, cardId: string, exchangeId: string) {
+    const [cards, card, exchange, chats] = await Promise.all([
+      get(uid, '/api/cards'),
+      get(uid, `/api/cards/${cardId}`),
+      get(uid, `/api/exchanges/${exchangeId}`),
+      get(uid, '/api/exchanges'),
+    ]);
+    return [cards.body[0].author.name, card.body.author.name, exchange.body.other.name, chats.body[0].other.name];
+  }
+
+  it('tras cambiar mi nombre, la otra persona lo ve nuevo en mis cards y en nuestro chat', async () => {
+    const me = await prisma.user.create({ data: { firebaseUid: 'uid-me', name: 'Mercè', email: 'me@barrio.local' } });
+    const other = await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    const card = await prisma.card.create({
+      data: { authorId: me.id, type: 'request', hours: 2, title: 'Regar plantas', description: 'Desc', category: 'garden' },
+    });
+    const exchange = await prisma.exchange.create({ data: { cardId: card.id, proposerId: other.id, receiverId: me.id, hours: 2 } });
+    expect(await namesSeenBy('uid-otra', card.id, exchange.id)).toEqual(['Mercè', 'Mercè', 'Mercè', 'Mercè']);
+
+    const res = await request(app).patch('/api/users/me').set('Authorization', 'Bearer uid-me').send({ name: 'Mercè Puig' });
+    expect(res.status).toBe(200);
+
+    expect(await namesSeenBy('uid-otra', card.id, exchange.id)).toEqual(['Mercè Puig', 'Mercè Puig', 'Mercè Puig', 'Mercè Puig']);
+  });
+});
