@@ -1,3 +1,4 @@
+import { AVATARS, type Avatar } from '../config/avatars';
 import { prisma } from '../config/prisma';
 import { Prisma, type ExchangeStatus, type User } from '../generated/prisma/client';
 import type { ParseResult } from './cardService';
@@ -96,16 +97,32 @@ const NAME_MAX_LENGTH = 80;
 
 export interface ProfileChanges {
   name?: string;
+  avatar?: string;
+}
+
+// "" es "sin avatar": el frontend pinta la inicial del nombre.
+function isAvatar(value: unknown): value is string {
+  return value === '' || AVATARS.includes(value as Avatar);
 }
 
 // Solo se lee lo que se puede editar: el resto de campos del cuerpo (email, verified…) se ignora.
 export function parseProfileChanges(body: unknown): ParseResult<ProfileChanges> {
   const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
-  if (input.name === undefined) return { ok: false, error: 'Envía name' };
+  if (input.name === undefined && input.avatar === undefined) return { ok: false, error: 'Envía name o avatar' };
 
-  const name = parseRequiredText(input, 'name', NAME_MAX_LENGTH);
-  if (!name.ok) return name;
-  return { ok: true, data: { name: name.data } };
+  const changes: ProfileChanges = {};
+  if (input.name !== undefined) {
+    const name = parseRequiredText(input, 'name', NAME_MAX_LENGTH);
+    if (!name.ok) return name;
+    changes.name = name.data;
+  }
+  if (input.avatar !== undefined) {
+    if (!isAvatar(input.avatar)) {
+      return { ok: false, error: `avatar debe ser uno de: ${AVATARS.join(', ')} o "" para no tener avatar` };
+    }
+    changes.avatar = input.avatar;
+  }
+  return { ok: true, data: changes };
 }
 
 // El nombre no se copia en ningún sitio: cards y chats lo leen con join, así que el cambio se ve en todas partes.

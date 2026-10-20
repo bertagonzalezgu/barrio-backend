@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { prisma } from '../config/prisma';
 import type { ExchangeStatus } from '../generated/prisma/client';
+import { AVATARS } from '../config/avatars';
 import { getBalance } from '../services/walletService';
 
 const mockVerifyIdToken = vi.fn();
@@ -403,8 +404,8 @@ describe('PATCH /api/users/me', () => {
     ['de solo espacios', { name: '   ' }, 'name es obligatorio y debe ser un texto'],
     ['que no es un texto', { name: 42 }, 'name es obligatorio y debe ser un texto'],
     ['de más de 80 caracteres', { name: 'a'.repeat(81) }, 'name debe tener 80 caracteres como máximo'],
-    ['ausente', {}, 'Envía name'],
-    ['ausente con otros campos', { email: 'otra@barrio.local' }, 'Envía name'],
+    ['ausente', {}, 'Envía name o avatar'],
+    ['ausente con otros campos', { email: 'otra@barrio.local' }, 'Envía name o avatar'],
   ])('devuelve 400 con un nombre %s, sin moderar ni guardar nada', async (_case, body, error) => {
     await createMe();
 
@@ -462,6 +463,75 @@ describe('PATCH /api/users/me', () => {
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'moderation_failed' });
     expect(await storedName()).toBe('Mercè');
+  });
+
+  async function storedAvatar() {
+    return (await prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } })).avatar;
+  }
+
+  it.each(AVATARS)('elige el avatar %s sin pasar por la moderación', async (avatar) => {
+    await createMe();
+
+    const res = await patchMe({ avatar });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ name: 'Mercè', avatar });
+    expect(await storedAvatar()).toBe(avatar);
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+
+  it('avatar "" quita el avatar', async () => {
+    const me = await createMe();
+    await prisma.user.update({ where: { id: me.id }, data: { avatar: '🎸' } });
+
+    const res = await patchMe({ avatar: '' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.avatar).toBe('');
+    expect(await storedAvatar()).toBe('');
+  });
+
+  it('cambia nombre y avatar a la vez y solo modera el nombre', async () => {
+    await createMe();
+
+    const res = await patchMe({ name: 'Mercè Puig', avatar: '🌻' });
+
+    expect(res.body).toMatchObject({ name: 'Mercè Puig', avatar: '🌻' });
+    expect(mockGroqCreate).toHaveBeenCalledTimes(1);
+    expect(mockGroqCreate.mock.calls[0][0].messages.at(-1).content).toBe('Mercè Puig');
+  });
+
+  it.each([
+    ['un emoji fuera de la lista', '😀'],
+    ['una URL', 'https://img/me.png'],
+    ['un número', 42],
+    ['null', null],
+    ['el emoji con espacios', ' 🎸 '],
+  ])('devuelve 400 con un avatar que es %s y no guarda nada', async (_case, avatar) => {
+    await createMe();
+
+    const res = await patchMe({ avatar, name: 'Nueva' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: `avatar debe ser uno de: ${AVATARS.join(', ')} o "" para no tener avatar` });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await storedName()).toBe('Mercè');
+    expect(await storedAvatar()).toBe('');
+  });
+
+  it('con un nombre inválido no guarda tampoco el avatar', async () => {
+    await createMe();
+
+    expect((await patchMe({ name: '', avatar: '🎸' })).status).toBe(400);
+    expect(await storedAvatar()).toBe('');
+  });
+
+  it('si la moderación rechaza el nombre no guarda tampoco el avatar', async () => {
+    await createMe();
+    moderationReturns({ seguro: false, motivo: 'ofensivo' });
+
+    expect((await patchMe({ name: 'Nombre ofensivo', avatar: '🎸' })).status).toBe(422);
+    expect(await storedAvatar()).toBe('');
   });
 
   it('devuelve 404 Usuario no registrado antes de validar el cuerpo', async () => {
