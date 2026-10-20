@@ -10,19 +10,8 @@ import {
   toCardResponse,
   updateCard,
 } from '../services/cardService';
-import { generateCardWithAI, moderateContent, parseGenerateCardInput } from '../services/aiCardService';
-
-async function rejectedByModeration(text: string, res: Response): Promise<boolean> {
-  try {
-    const moderation = await moderateContent(text);
-    if (moderation.seguro) return false;
-    res.status(422).json({ error: 'content_rejected', message: moderation.message });
-  } catch (error) {
-    console.error('Fallo al moderar la card:', error);
-    res.status(500).json({ error: 'moderation_failed' });
-  }
-  return true;
-}
+import { generateCardWithAI, parseGenerateCardInput } from '../services/aiCardService';
+import { rejectedByModeration } from './moderation';
 
 export async function postCard(req: Request, res: Response): Promise<void> {
   if (!req.user) {

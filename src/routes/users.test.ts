@@ -3,10 +3,19 @@ import { prisma } from '../config/prisma';
 import type { ExchangeStatus } from '../generated/prisma/client';
 import { getBalance } from '../services/walletService';
 
+// Escritas a mano y no importadas de config/avatars: el test comprueba el contrato, no la constante.
+const AVATAR_KEYS = Array.from({ length: 12 }, (_, i) => `avatar-${String(i + 1).padStart(2, '0')}`);
+const AVATAR_ERROR = `avatar debe ser uno de: ${AVATAR_KEYS.join(', ')} o "" para no tener avatar`;
+
 const mockVerifyIdToken = vi.fn();
+const mockGroqCreate = vi.fn();
 
 vi.mock('../config/firebase', () => ({
   getAuth: () => ({ verifyIdToken: mockVerifyIdToken }),
+}));
+
+vi.mock('../config/groq', () => ({
+  getGroqClient: () => ({ chat: { completions: { create: mockGroqCreate } } }),
 }));
 
 import app from '../app';
@@ -110,13 +119,57 @@ describe('GET /api/users/me', () => {
     expect(res.status).toBe(401);
   });
 
-  it('devuelve solo el nombre del usuario autenticado', async () => {
-    await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
+  // perfil.feature — "Ver mi perfil con historial de créditos": la parte del perfil; el historial va en wallet.
+  it('devuelve mi perfil con la misma forma que el perfil público', async () => {
+    const me = await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
 
     const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ name: 'Mercè' });
+    expect(res.body).toEqual({
+      id: me.id,
+      name: 'Mercè',
+      avatar: '',
+      verified: false,
+      ratingAverage: null,
+      ratingCount: 0,
+      exchangeCount: 0,
+      createdAt: me.registeredAt.toISOString(),
+    });
+  });
+
+  it('incluye mi media, las valoraciones recibidas y los intercambios completados', async () => {
+    const me = await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
+    const other = await prisma.user.create({ data: { firebaseUid: 'uid-otra', email: 'otra@barrio.local', name: 'Otra' } });
+    const card = await prisma.card.create({
+      data: { authorId: me.id, type: 'offer', hours: 1, status: 'completed', title: 'Card', description: 'Desc', category: 'garden' },
+    });
+    const exchange = await prisma.exchange.create({ data: { cardId: card.id, proposerId: other.id, receiverId: me.id, hours: 1, status: 'confirmed' } });
+    await prisma.rating.create({ data: { exchangeId: exchange.id, raterId: other.id, ratedUserId: me.id, score: 4 } });
+
+    const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
+
+    expect(res.body).toMatchObject({ ratingAverage: 4, ratingCount: 1, exchangeCount: 1 });
+  });
+
+  // perfil.feature — "Ver la insignia de verificado"
+  it('con la identidad verificada devuelve verified true', async () => {
+    await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè', verified: true } });
+
+    const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
+
+    expect(res.body.verified).toBe(true);
+  });
+
+  it('no incluye email, firebaseUid ni el saldo en ninguna parte del JSON', async () => {
+    await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
+
+    const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
+
+    const json = JSON.stringify(res.body);
+    for (const leak of ['"email"', '"firebaseUid"', 'me@barrio.local', 'uid-me', '"balance"', 'welcomeCredit']) {
+      expect(json).not.toContain(leak);
+    }
   });
 
   it('devuelve 404 si el usuario no está registrado', async () => {
@@ -168,7 +221,7 @@ describe('GET /api/users/:id', () => {
 
   it('devuelve exactamente los campos públicos: ni email, ni firebaseUid, ni comentarios', async () => {
     await createUser('uid-visita');
-    const ana = await createUser('uid-ana', { avatar: 'https://img/ana.png', verified: true });
+    const ana = await createUser('uid-ana', { avatar: 'avatar-03', verified: true });
     await receiveRatings(ana.id, [5]);
 
     const res = await getProfile('uid-visita', ana.id);
@@ -177,7 +230,7 @@ describe('GET /api/users/:id', () => {
     expect(res.body).toEqual({
       id: ana.id,
       name: 'uid-ana',
-      avatar: 'https://img/ana.png',
+      avatar: 'avatar-03',
       verified: true,
       ratingAverage: 5,
       ratingCount: 1,
@@ -274,11 +327,283 @@ describe('GET /api/users/:id', () => {
   });
 
   it('/me sigue yendo a sus propias rutas y no se interpreta como un id', async () => {
-    await createUser('uid-ana');
+    const ana = await createUser('uid-ana');
 
     const res = await request(app).get('/api/users/me').set('Authorization', 'Bearer uid-ana');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ name: 'uid-ana' });
+    expect(res.body).toMatchObject({ id: ana.id, name: 'uid-ana' });
+  });
+});
+
+// perfil.feature — "Editar mi avatar y nombre"
+describe('PATCH /api/users/me', () => {
+  const ME_UID = 'uid-me';
+
+  function moderationReturns(result: object) {
+    mockGroqCreate.mockResolvedValue({ choices: [{ message: { content: JSON.stringify(result) } }] });
+  }
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+    mockVerifyIdToken.mockImplementation(async (token: string) => ({ uid: token }));
+    mockGroqCreate.mockReset();
+    moderationReturns({ seguro: true, motivo: 'ok' });
+  });
+
+  function createMe() {
+    return prisma.user.create({ data: { firebaseUid: ME_UID, name: 'Mercè', email: 'me@barrio.local' } });
+  }
+
+  function patchMe(body: unknown, uid = ME_UID) {
+    return request(app).patch('/api/users/me').set('Authorization', `Bearer ${uid}`).send(body as object);
+  }
+
+  async function storedName() {
+    return (await prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } })).name;
+  }
+
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).patch('/api/users/me').send({ name: 'Nueva' });
+    expect(res.status).toBe(401);
+  });
+
+  it('cambia el nombre, recortado, y responde con mi perfil actualizado', async () => {
+    const me = await createMe();
+
+    const res = await patchMe({ name: '  Mercè Puig  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      id: me.id,
+      name: 'Mercè Puig',
+      avatar: '',
+      verified: false,
+      ratingAverage: null,
+      ratingCount: 0,
+      exchangeCount: 0,
+      createdAt: me.registeredAt.toISOString(),
+    });
+    expect(await storedName()).toBe('Mercè Puig');
+  });
+
+  it('modera el nombre ya recortado', async () => {
+    await createMe();
+
+    await patchMe({ name: '  Mercè Puig  ' });
+
+    const [[params]] = mockGroqCreate.mock.calls;
+    expect(params.messages.at(-1).content).toBe('Mercè Puig');
+  });
+
+  it('acepta un nombre de exactamente 80 caracteres', async () => {
+    await createMe();
+
+    expect((await patchMe({ name: 'a'.repeat(80) })).status).toBe(200);
+  });
+
+  it.each([
+    ['vacío', { name: '' }, 'name es obligatorio y debe ser un texto'],
+    ['de solo espacios', { name: '   ' }, 'name es obligatorio y debe ser un texto'],
+    ['que no es un texto', { name: 42 }, 'name es obligatorio y debe ser un texto'],
+    ['de más de 80 caracteres', { name: 'a'.repeat(81) }, 'name debe tener 80 caracteres como máximo'],
+    ['ausente', {}, 'Envía name o avatar'],
+    ['ausente con otros campos', { email: 'otra@barrio.local' }, 'Envía name o avatar'],
+  ])('devuelve 400 con un nombre %s, sin moderar ni guardar nada', async (_case, body, error) => {
+    await createMe();
+
+    const res = await patchMe(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  it('ignora los campos desconocidos: no se puede cambiar el email ni verificarse', async () => {
+    await createMe();
+
+    const res = await patchMe({ name: 'Nueva', email: 'hack@barrio.local', verified: true, firebaseUid: 'otro' });
+
+    expect(res.status).toBe(200);
+    expect(await prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } })).toMatchObject({
+      name: 'Nueva',
+      email: 'me@barrio.local',
+      verified: false,
+    });
+  });
+
+  it('devuelve 422 content_rejected si la IA rechaza el nombre y no lo guarda', async () => {
+    await createMe();
+    moderationReturns({ seguro: false, motivo: 'ofensivo' });
+
+    const res = await patchMe({ name: 'Nombre ofensivo' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected' });
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  it('devuelve 422 con el message de la blocklist sin llamar a la IA y no lo guarda', async () => {
+    await createMe();
+
+    const res = await patchMe({ name: 'Mercè 612345678' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected', message: expect.any(String) });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  it('devuelve 500 moderation_failed si el clasificador falla y no lo guarda', async () => {
+    await createMe();
+    mockGroqCreate.mockRejectedValue(new Error('network down'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await patchMe({ name: 'Nueva' });
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'moderation_failed' });
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  async function storedAvatar() {
+    return (await prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } })).avatar;
+  }
+
+  it('el conjunto son exactamente las claves avatar-01 a avatar-12', () => {
+    expect(AVATAR_KEYS).toHaveLength(12);
+    expect(AVATAR_KEYS[0]).toBe('avatar-01');
+    expect(AVATAR_KEYS[11]).toBe('avatar-12');
+  });
+
+  it.each(AVATAR_KEYS)('elige el avatar %s sin pasar por la moderación', async (avatar) => {
+    await createMe();
+
+    const res = await patchMe({ avatar });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ name: 'Mercè', avatar });
+    expect(await storedAvatar()).toBe(avatar);
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+
+  it('avatar "" quita el avatar', async () => {
+    const me = await createMe();
+    await prisma.user.update({ where: { id: me.id }, data: { avatar: 'avatar-05' } });
+
+    const res = await patchMe({ avatar: '' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.avatar).toBe('');
+    expect(await storedAvatar()).toBe('');
+  });
+
+  it('cambia nombre y avatar a la vez y solo modera el nombre', async () => {
+    await createMe();
+
+    const res = await patchMe({ name: 'Mercè Puig', avatar: 'avatar-04' });
+
+    expect(res.body).toMatchObject({ name: 'Mercè Puig', avatar: 'avatar-04' });
+    expect(mockGroqCreate).toHaveBeenCalledTimes(1);
+    expect(mockGroqCreate.mock.calls[0][0].messages.at(-1).content).toBe('Mercè Puig');
+  });
+
+  it.each([
+    ['un emoji', '🐈'],
+    ['una URL', 'https://img/me.png'],
+    ['un número', 42],
+    ['null', null],
+    ['una clave fuera del rango por arriba', 'avatar-13'],
+    ['una clave fuera del rango por abajo', 'avatar-00'],
+    ['una clave con un espacio delante', ' avatar-01'],
+    ['una clave en mayúsculas', 'AVATAR-01'],
+  ])('devuelve 400 con un avatar que es %s y no guarda nada', async (_case, avatar) => {
+    await createMe();
+
+    const res = await patchMe({ avatar, name: 'Nueva' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: AVATAR_ERROR });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await storedName()).toBe('Mercè');
+    expect(await storedAvatar()).toBe('');
+  });
+
+  it('con un nombre inválido no guarda tampoco el avatar', async () => {
+    await createMe();
+
+    expect((await patchMe({ name: '', avatar: 'avatar-05' })).status).toBe(400);
+    expect(await storedAvatar()).toBe('');
+  });
+
+  it('si la moderación rechaza el nombre no guarda tampoco el avatar', async () => {
+    await createMe();
+    moderationReturns({ seguro: false, motivo: 'ofensivo' });
+
+    expect((await patchMe({ name: 'Nombre ofensivo', avatar: 'avatar-05' })).status).toBe(422);
+    expect(await storedAvatar()).toBe('');
+  });
+
+  it('GET /me y GET /users/:id devuelven la clave guardada tal cual', async () => {
+    const me = await createMe();
+    await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    expect((await patchMe({ avatar: 'avatar-07' })).status).toBe(200);
+
+    const own = await request(app).get('/api/users/me').set('Authorization', `Bearer ${ME_UID}`);
+    const seenByOther = await request(app).get(`/api/users/${me.id}`).set('Authorization', 'Bearer uid-otra');
+
+    expect(own.body.avatar).toBe('avatar-07');
+    expect(seenByOther.body.avatar).toBe('avatar-07');
+  });
+
+  it('devuelve 404 Usuario no registrado antes de validar el cuerpo', async () => {
+    for (const body of [{ name: 'Nueva' }, { name: '' }, {}]) {
+      const res = await patchMe(body, 'uid-sin-registro');
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'Usuario no registrado' });
+    }
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+});
+
+// perfil.feature — "Editar mi avatar y nombre": el nuevo nombre se refleja en mis tarjetas y en el chat.
+describe('PATCH /api/users/me — el nombre nuevo se ve en cards y chats', () => {
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+    mockVerifyIdToken.mockImplementation(async (token: string) => ({ uid: token }));
+    mockGroqCreate.mockReset();
+    mockGroqCreate.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ seguro: true, motivo: 'ok' }) } }] });
+  });
+
+  function get(uid: string, path: string) {
+    return request(app).get(path).set('Authorization', `Bearer ${uid}`);
+  }
+
+  // Lo que ven las demás del nombre de la autora: en sus cards (listado y detalle) y en el chat (detalle y bandeja).
+  async function namesSeenBy(uid: string, cardId: string, exchangeId: string) {
+    const [cards, card, exchange, chats] = await Promise.all([
+      get(uid, '/api/cards'),
+      get(uid, `/api/cards/${cardId}`),
+      get(uid, `/api/exchanges/${exchangeId}`),
+      get(uid, '/api/exchanges'),
+    ]);
+    return [cards.body[0].author.name, card.body.author.name, exchange.body.other.name, chats.body[0].other.name];
+  }
+
+  it('tras cambiar mi nombre, la otra persona lo ve nuevo en mis cards y en nuestro chat', async () => {
+    const me = await prisma.user.create({ data: { firebaseUid: 'uid-me', name: 'Mercè', email: 'me@barrio.local' } });
+    const other = await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    const card = await prisma.card.create({
+      data: { authorId: me.id, type: 'request', hours: 2, title: 'Regar plantas', description: 'Desc', category: 'garden' },
+    });
+    const exchange = await prisma.exchange.create({ data: { cardId: card.id, proposerId: other.id, receiverId: me.id, hours: 2 } });
+    expect(await namesSeenBy('uid-otra', card.id, exchange.id)).toEqual(['Mercè', 'Mercè', 'Mercè', 'Mercè']);
+
+    const res = await request(app).patch('/api/users/me').set('Authorization', 'Bearer uid-me').send({ name: 'Mercè Puig' });
+    expect(res.status).toBe(200);
+
+    expect(await namesSeenBy('uid-otra', card.id, exchange.id)).toEqual(['Mercè Puig', 'Mercè Puig', 'Mercè Puig', 'Mercè Puig']);
   });
 });

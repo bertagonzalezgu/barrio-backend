@@ -743,10 +743,10 @@ describe('author e isMine en las respuestas de cards', () => {
 
   it('el avatar de la autora sale tal cual', async () => {
     const { author, card } = await seed();
-    await prisma.user.update({ where: { id: author.id }, data: { avatar: 'https://img/autora.png' } });
+    await prisma.user.update({ where: { id: author.id }, data: { avatar: 'avatar-02' } });
 
     const res = await request(app).get(`/api/cards/${card.id}`).set('Authorization', as(OTHER_UID));
 
-    expect(res.body.author.avatar).toBe('https://img/autora.png');
+    expect(res.body.author.avatar).toBe('avatar-02');
   });
 });
