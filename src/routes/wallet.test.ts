@@ -131,7 +131,7 @@ describe('GET /api/wallet/transactions', () => {
   it('incluye una transferencia entrante y una saliente con su card y la otra persona, de la más reciente a la más antigua', async () => {
     const ana = await createUser('uid-ana', 'Ana');
     const javi = await createUser('uid-javi', 'Javi');
-    await prisma.user.update({ where: { id: javi.id }, data: { avatar: '🎸' } });
+    await prisma.user.update({ where: { id: javi.id }, data: { avatar: 'avatar-05' } });
     await prisma.timeTransaction.create({ data: { type: 'transfer', toUserId: ana.id, hours: 2, date: new Date('2026-09-29T15:27:03Z') } });
     // Ana da clases de guitarra a Javi y cobra; después Javi le arregla la bici y Ana paga.
     const incoming = await createTransfer(ana.id, javi.id, { fromUserId: javi.id, toUserId: ana.id, date: new Date('2026-10-12T10:30:00Z') });
@@ -158,14 +158,14 @@ describe('GET /api/wallet/transactions', () => {
       date: '2026-10-15T18:00:00.000Z',
       exchangeId: outgoing.exchange.id,
       card: { id: outgoing.card.id, title: 'Arreglo bicis', type: 'offer', category: 'learning' },
-      other: { id: javi.id, name: 'Javi', avatar: '🎸' },
+      other: { id: javi.id, name: 'Javi', avatar: 'avatar-05' },
     });
     expect(res.body.items[1]).toMatchObject({
       id: incoming.transaction.id,
       direction: 'in',
       exchangeId: incoming.exchange.id,
       card: { id: incoming.card.id, title: 'Clases de guitarra' },
-      other: { id: javi.id, name: 'Javi', avatar: '🎸' },
+      other: { id: javi.id, name: 'Javi', avatar: 'avatar-05' },
     });
   });
 

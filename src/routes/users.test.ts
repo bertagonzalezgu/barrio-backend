@@ -1,8 +1,11 @@
 import request from 'supertest';
 import { prisma } from '../config/prisma';
 import type { ExchangeStatus } from '../generated/prisma/client';
-import { AVATARS } from '../config/avatars';
 import { getBalance } from '../services/walletService';
+
+// Escritas a mano y no importadas de config/avatars: el test comprueba el contrato, no la constante.
+const AVATAR_KEYS = Array.from({ length: 12 }, (_, i) => `avatar-${String(i + 1).padStart(2, '0')}`);
+const AVATAR_ERROR = `avatar debe ser uno de: ${AVATAR_KEYS.join(', ')} o "" para no tener avatar`;
 
 const mockVerifyIdToken = vi.fn();
 const mockGroqCreate = vi.fn();
@@ -218,7 +221,7 @@ describe('GET /api/users/:id', () => {
 
   it('devuelve exactamente los campos públicos: ni email, ni firebaseUid, ni comentarios', async () => {
     await createUser('uid-visita');
-    const ana = await createUser('uid-ana', { avatar: 'https://img/ana.png', verified: true });
+    const ana = await createUser('uid-ana', { avatar: 'avatar-03', verified: true });
     await receiveRatings(ana.id, [5]);
 
     const res = await getProfile('uid-visita', ana.id);
@@ -227,7 +230,7 @@ describe('GET /api/users/:id', () => {
     expect(res.body).toEqual({
       id: ana.id,
       name: 'uid-ana',
-      avatar: 'https://img/ana.png',
+      avatar: 'avatar-03',
       verified: true,
       ratingAverage: 5,
       ratingCount: 1,
@@ -469,7 +472,13 @@ describe('PATCH /api/users/me', () => {
     return (await prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } })).avatar;
   }
 
-  it.each(AVATARS)('elige el avatar %s sin pasar por la moderación', async (avatar) => {
+  it('el conjunto son exactamente las claves avatar-01 a avatar-12', () => {
+    expect(AVATAR_KEYS).toHaveLength(12);
+    expect(AVATAR_KEYS[0]).toBe('avatar-01');
+    expect(AVATAR_KEYS[11]).toBe('avatar-12');
+  });
+
+  it.each(AVATAR_KEYS)('elige el avatar %s sin pasar por la moderación', async (avatar) => {
     await createMe();
 
     const res = await patchMe({ avatar });
@@ -482,7 +491,7 @@ describe('PATCH /api/users/me', () => {
 
   it('avatar "" quita el avatar', async () => {
     const me = await createMe();
-    await prisma.user.update({ where: { id: me.id }, data: { avatar: '🎸' } });
+    await prisma.user.update({ where: { id: me.id }, data: { avatar: 'avatar-05' } });
 
     const res = await patchMe({ avatar: '' });
 
@@ -494,26 +503,29 @@ describe('PATCH /api/users/me', () => {
   it('cambia nombre y avatar a la vez y solo modera el nombre', async () => {
     await createMe();
 
-    const res = await patchMe({ name: 'Mercè Puig', avatar: '🌻' });
+    const res = await patchMe({ name: 'Mercè Puig', avatar: 'avatar-04' });
 
-    expect(res.body).toMatchObject({ name: 'Mercè Puig', avatar: '🌻' });
+    expect(res.body).toMatchObject({ name: 'Mercè Puig', avatar: 'avatar-04' });
     expect(mockGroqCreate).toHaveBeenCalledTimes(1);
     expect(mockGroqCreate.mock.calls[0][0].messages.at(-1).content).toBe('Mercè Puig');
   });
 
   it.each([
-    ['un emoji fuera de la lista', '😀'],
+    ['un emoji', '🐈'],
     ['una URL', 'https://img/me.png'],
     ['un número', 42],
     ['null', null],
-    ['el emoji con espacios', ' 🎸 '],
+    ['una clave fuera del rango por arriba', 'avatar-13'],
+    ['una clave fuera del rango por abajo', 'avatar-00'],
+    ['una clave con un espacio delante', ' avatar-01'],
+    ['una clave en mayúsculas', 'AVATAR-01'],
   ])('devuelve 400 con un avatar que es %s y no guarda nada', async (_case, avatar) => {
     await createMe();
 
     const res = await patchMe({ avatar, name: 'Nueva' });
 
     expect(res.status).toBe(400);
-    expect(res.body).toEqual({ error: `avatar debe ser uno de: ${AVATARS.join(', ')} o "" para no tener avatar` });
+    expect(res.body).toEqual({ error: AVATAR_ERROR });
     expect(mockGroqCreate).not.toHaveBeenCalled();
     expect(await storedName()).toBe('Mercè');
     expect(await storedAvatar()).toBe('');
@@ -522,7 +534,7 @@ describe('PATCH /api/users/me', () => {
   it('con un nombre inválido no guarda tampoco el avatar', async () => {
     await createMe();
 
-    expect((await patchMe({ name: '', avatar: '🎸' })).status).toBe(400);
+    expect((await patchMe({ name: '', avatar: 'avatar-05' })).status).toBe(400);
     expect(await storedAvatar()).toBe('');
   });
 
@@ -530,8 +542,20 @@ describe('PATCH /api/users/me', () => {
     await createMe();
     moderationReturns({ seguro: false, motivo: 'ofensivo' });
 
-    expect((await patchMe({ name: 'Nombre ofensivo', avatar: '🎸' })).status).toBe(422);
+    expect((await patchMe({ name: 'Nombre ofensivo', avatar: 'avatar-05' })).status).toBe(422);
     expect(await storedAvatar()).toBe('');
+  });
+
+  it('GET /me y GET /users/:id devuelven la clave guardada tal cual', async () => {
+    const me = await createMe();
+    await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    expect((await patchMe({ avatar: 'avatar-07' })).status).toBe(200);
+
+    const own = await request(app).get('/api/users/me').set('Authorization', `Bearer ${ME_UID}`);
+    const seenByOther = await request(app).get(`/api/users/${me.id}`).set('Authorization', 'Bearer uid-otra');
+
+    expect(own.body.avatar).toBe('avatar-07');
+    expect(seenByOther.body.avatar).toBe('avatar-07');
   });
 
   it('devuelve 404 Usuario no registrado antes de validar el cuerpo', async () => {

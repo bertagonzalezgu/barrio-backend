@@ -21,7 +21,7 @@ El perfil público de otra persona (`GET /api/users/:id`) está en [`ratings-api
 {
   "id": "0d9c8b7a-6f5e-4d3c-2b1a-0f9e8d7c6b5a",
   "name": "Mercè",
-  "avatar": "🌻",
+  "avatar": "avatar-04",
   "verified": false,
   "ratingAverage": 4.5,
   "ratingCount": 2,
@@ -49,11 +49,11 @@ El significado de cada campo está en la [tabla del perfil público](./ratings-a
 **Petición:** al menos uno de los dos campos.
 
 ```json
-{ "name": "Mercè Puig", "avatar": "🌻" }
+{ "name": "Mercè Puig", "avatar": "avatar-04" }
 ```
 
 - **`name`** (opcional): texto. Se recortan los espacios del principio y del final. Tras recortar debe tener entre 1 y 80 caracteres: solo espacios cuenta como vacío y exactamente 80 es válido. Se modera antes de guardarlo, igual que el texto de una card.
-- **`avatar`** (opcional): uno de los avatares de la lista de abajo, o `""` para quitar el avatar. No se modera.
+- **`avatar`** (opcional): una de las claves de la lista de abajo, o `""` para quitar el avatar. No se modera.
 - **Otros campos** (`email`, `verified`, `firebaseUid`…): se ignoran. No se pueden cambiar por esta ruta.
 - **Todo o nada:** si cualquiera de los dos campos es inválido, o el nombre no pasa la moderación, no se guarda ninguno.
 
@@ -63,14 +63,16 @@ El significado de cada campo está en la [tabla del perfil público](./ratings-a
 
 ### Avatares disponibles
 
-Lista cerrada, definida en `src/config/avatars.ts` (`AVATARS`). No hay subida de ficheros ni URLs.
+Lista cerrada de 12 claves, definida en `src/config/avatars.ts` (`AVATARS`). No hay subida de ficheros ni URLs. El backend solo guarda y devuelve la clave; qué imagen corresponde a cada una lo decide el frontend.
 
 ```
-🐈 🐕 🌿 🌻 🎸 🔧 📚 🍳 🚲 🏡 ☕ 🧶
+avatar-01  avatar-02  avatar-03  avatar-04  avatar-05  avatar-06
+avatar-07  avatar-08  avatar-09  avatar-10  avatar-11  avatar-12
 ```
 
-- **Comparación exacta:** cada avatar es un único carácter Unicode, sin selector de variante. El frontend debe enviar el valor tal como está en la lista. Un `☕️` con `U+FE0F` (lo que añaden algunos teclados) se rechaza *(sin test este caso; sí el de espacios alrededor)*.
+- **Comparación exacta:** no se recortan espacios ni se ignoran mayúsculas. `" avatar-01"` y `"AVATAR-01"` se rechazan, igual que `"avatar-00"` o `"avatar-13"`.
 - **`""`:** sin avatar.
+- **Lectura:** `GET /api/users/me`, `GET /api/users/:id` y el resto de respuestas que incluyen `avatar` (`author` en cards, `other` en chats y en el historial) devuelven la clave tal como se guardó *(sin test con una clave en chats; en cards y en el historial sí)*.
 
 ### Orden de comprobación
 
@@ -82,7 +84,7 @@ Lista cerrada, definida en `src/config/avatars.ts` (`AVATARS`). No hay subida de
 | 400 | `Envía name o avatar` | El cuerpo no trae ni `name` ni `avatar` (aunque traiga otros campos). |
 | 400 | `name es obligatorio y debe ser un texto` | `name` viene, pero no es una cadena o queda vacío al recortar. |
 | 400 | `name debe tener 80 caracteres como máximo` | `name` tiene más de 80 caracteres tras recortar. |
-| 400 | `avatar debe ser uno de: 🐈, 🐕, 🌿, 🌻, 🎸, 🔧, 📚, 🍳, 🚲, 🏡, ☕, 🧶 o "" para no tener avatar` | `avatar` viene y no es uno de la lista ni `""` (otro emoji, una URL, un número, `null`, el emoji con espacios…). |
+| 400 | `avatar debe ser uno de: avatar-01, avatar-02, avatar-03, avatar-04, avatar-05, avatar-06, avatar-07, avatar-08, avatar-09, avatar-10, avatar-11, avatar-12 o "" para no tener avatar` | `avatar` viene y no es una clave de la lista ni `""` (un emoji, una URL, un número, `null`, una clave fuera de rango, con espacios o en mayúsculas…). |
 | 422 | `content_rejected` | El nombre no pasa la moderación. Puede traer `message` con el motivo legible (los filtros fijos, como teléfonos o emails, lo traen; el clasificador de IA no). |
 | 500 | `moderation_failed` | El clasificador ha fallado. No se guarda nada; se puede reintentar. |
 
