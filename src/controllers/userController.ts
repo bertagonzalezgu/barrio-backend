@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { getPublicProfile, getUserName, registerUser } from '../services/userService';
+import { getOwnProfile, getPublicProfile, registerUser } from '../services/userService';
 
 export async function registerCurrentUser(req: Request, res: Response): Promise<void> {
   if (!req.user) {
@@ -36,13 +36,13 @@ export async function getCurrentUser(req: Request, res: Response): Promise<void>
     return;
   }
 
-  const name = await getUserName(req.user.uid);
-  if (name === null) {
+  const profile = await getOwnProfile(req.user.uid);
+  if (!profile) {
     res.status(404).json({ error: 'Usuario no encontrado' });
     return;
   }
 
-  res.json({ name });
+  res.json(profile);
 }
 
 const PROFILE_ERRORS = {

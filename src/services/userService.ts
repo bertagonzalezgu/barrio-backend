@@ -90,7 +90,8 @@ async function buildProfile(userId: string): Promise<PublicProfile | null> {
   };
 }
 
-export async function getUserName(firebaseUid: string): Promise<string | null> {
-  const user = await prisma.user.findUnique({ where: { firebaseUid }, select: { name: true } });
-  return user ? user.name : null;
+// Mi perfil tiene la misma forma que el que ven las demás: el frontend usa un solo tipo para los dos.
+export async function getOwnProfile(firebaseUid: string): Promise<PublicProfile | null> {
+  const userId = await findUserId(firebaseUid);
+  return userId ? buildProfile(userId) : null;
 }

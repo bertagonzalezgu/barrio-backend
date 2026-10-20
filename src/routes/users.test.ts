@@ -110,13 +110,57 @@ describe('GET /api/users/me', () => {
     expect(res.status).toBe(401);
   });
 
-  it('devuelve solo el nombre del usuario autenticado', async () => {
-    await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
+  // perfil.feature — "Ver mi perfil con historial de créditos": la parte del perfil; el historial va en wallet.
+  it('devuelve mi perfil con la misma forma que el perfil público', async () => {
+    const me = await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
 
     const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ name: 'Mercè' });
+    expect(res.body).toEqual({
+      id: me.id,
+      name: 'Mercè',
+      avatar: '',
+      verified: false,
+      ratingAverage: null,
+      ratingCount: 0,
+      exchangeCount: 0,
+      createdAt: me.registeredAt.toISOString(),
+    });
+  });
+
+  it('incluye mi media, las valoraciones recibidas y los intercambios completados', async () => {
+    const me = await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
+    const other = await prisma.user.create({ data: { firebaseUid: 'uid-otra', email: 'otra@barrio.local', name: 'Otra' } });
+    const card = await prisma.card.create({
+      data: { authorId: me.id, type: 'offer', hours: 1, status: 'completed', title: 'Card', description: 'Desc', category: 'garden' },
+    });
+    const exchange = await prisma.exchange.create({ data: { cardId: card.id, proposerId: other.id, receiverId: me.id, hours: 1, status: 'confirmed' } });
+    await prisma.rating.create({ data: { exchangeId: exchange.id, raterId: other.id, ratedUserId: me.id, score: 4 } });
+
+    const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
+
+    expect(res.body).toMatchObject({ ratingAverage: 4, ratingCount: 1, exchangeCount: 1 });
+  });
+
+  // perfil.feature — "Ver la insignia de verificado"
+  it('con la identidad verificada devuelve verified true', async () => {
+    await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè', verified: true } });
+
+    const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
+
+    expect(res.body.verified).toBe(true);
+  });
+
+  it('no incluye email, firebaseUid ni el saldo en ninguna parte del JSON', async () => {
+    await prisma.user.create({ data: { firebaseUid: 'uid-me', email: 'me@barrio.local', name: 'Mercè' } });
+
+    const res = await getMeAs({ uid: 'uid-me', email: 'me@barrio.local' });
+
+    const json = JSON.stringify(res.body);
+    for (const leak of ['"email"', '"firebaseUid"', 'me@barrio.local', 'uid-me', '"balance"', 'welcomeCredit']) {
+      expect(json).not.toContain(leak);
+    }
   });
 
   it('devuelve 404 si el usuario no está registrado', async () => {
@@ -274,11 +318,11 @@ describe('GET /api/users/:id', () => {
   });
 
   it('/me sigue yendo a sus propias rutas y no se interpreta como un id', async () => {
-    await createUser('uid-ana');
+    const ana = await createUser('uid-ana');
 
     const res = await request(app).get('/api/users/me').set('Authorization', 'Bearer uid-ana');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ name: 'uid-ana' });
+    expect(res.body).toMatchObject({ id: ana.id, name: 'uid-ana' });
   });
 });
