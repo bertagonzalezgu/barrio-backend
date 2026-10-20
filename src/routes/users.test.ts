@@ -4,9 +4,14 @@ import type { ExchangeStatus } from '../generated/prisma/client';
 import { getBalance } from '../services/walletService';
 
 const mockVerifyIdToken = vi.fn();
+const mockGroqCreate = vi.fn();
 
 vi.mock('../config/firebase', () => ({
   getAuth: () => ({ verifyIdToken: mockVerifyIdToken }),
+}));
+
+vi.mock('../config/groq', () => ({
+  getGroqClient: () => ({ chat: { completions: { create: mockGroqCreate } } }),
 }));
 
 import app from '../app';
@@ -324,5 +329,147 @@ describe('GET /api/users/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ id: ana.id, name: 'uid-ana' });
+  });
+});
+
+// perfil.feature — "Editar mi avatar y nombre"
+describe('PATCH /api/users/me', () => {
+  const ME_UID = 'uid-me';
+
+  function moderationReturns(result: object) {
+    mockGroqCreate.mockResolvedValue({ choices: [{ message: { content: JSON.stringify(result) } }] });
+  }
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+    mockVerifyIdToken.mockImplementation(async (token: string) => ({ uid: token }));
+    mockGroqCreate.mockReset();
+    moderationReturns({ seguro: true, motivo: 'ok' });
+  });
+
+  function createMe() {
+    return prisma.user.create({ data: { firebaseUid: ME_UID, name: 'Mercè', email: 'me@barrio.local' } });
+  }
+
+  function patchMe(body: unknown, uid = ME_UID) {
+    return request(app).patch('/api/users/me').set('Authorization', `Bearer ${uid}`).send(body as object);
+  }
+
+  async function storedName() {
+    return (await prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } })).name;
+  }
+
+  it('devuelve 401 sin token', async () => {
+    const res = await request(app).patch('/api/users/me').send({ name: 'Nueva' });
+    expect(res.status).toBe(401);
+  });
+
+  it('cambia el nombre, recortado, y responde con mi perfil actualizado', async () => {
+    const me = await createMe();
+
+    const res = await patchMe({ name: '  Mercè Puig  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      id: me.id,
+      name: 'Mercè Puig',
+      avatar: '',
+      verified: false,
+      ratingAverage: null,
+      ratingCount: 0,
+      exchangeCount: 0,
+      createdAt: me.registeredAt.toISOString(),
+    });
+    expect(await storedName()).toBe('Mercè Puig');
+  });
+
+  it('modera el nombre ya recortado', async () => {
+    await createMe();
+
+    await patchMe({ name: '  Mercè Puig  ' });
+
+    const [[params]] = mockGroqCreate.mock.calls;
+    expect(params.messages.at(-1).content).toBe('Mercè Puig');
+  });
+
+  it('acepta un nombre de exactamente 80 caracteres', async () => {
+    await createMe();
+
+    expect((await patchMe({ name: 'a'.repeat(80) })).status).toBe(200);
+  });
+
+  it.each([
+    ['vacío', { name: '' }, 'name es obligatorio y debe ser un texto'],
+    ['de solo espacios', { name: '   ' }, 'name es obligatorio y debe ser un texto'],
+    ['que no es un texto', { name: 42 }, 'name es obligatorio y debe ser un texto'],
+    ['de más de 80 caracteres', { name: 'a'.repeat(81) }, 'name debe tener 80 caracteres como máximo'],
+    ['ausente', {}, 'Envía name'],
+    ['ausente con otros campos', { email: 'otra@barrio.local' }, 'Envía name'],
+  ])('devuelve 400 con un nombre %s, sin moderar ni guardar nada', async (_case, body, error) => {
+    await createMe();
+
+    const res = await patchMe(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  it('ignora los campos desconocidos: no se puede cambiar el email ni verificarse', async () => {
+    await createMe();
+
+    const res = await patchMe({ name: 'Nueva', email: 'hack@barrio.local', verified: true, firebaseUid: 'otro' });
+
+    expect(res.status).toBe(200);
+    expect(await prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } })).toMatchObject({
+      name: 'Nueva',
+      email: 'me@barrio.local',
+      verified: false,
+    });
+  });
+
+  it('devuelve 422 content_rejected si la IA rechaza el nombre y no lo guarda', async () => {
+    await createMe();
+    moderationReturns({ seguro: false, motivo: 'ofensivo' });
+
+    const res = await patchMe({ name: 'Nombre ofensivo' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected' });
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  it('devuelve 422 con el message de la blocklist sin llamar a la IA y no lo guarda', async () => {
+    await createMe();
+
+    const res = await patchMe({ name: 'Mercè 612345678' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected', message: expect.any(String) });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  it('devuelve 500 moderation_failed si el clasificador falla y no lo guarda', async () => {
+    await createMe();
+    mockGroqCreate.mockRejectedValue(new Error('network down'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await patchMe({ name: 'Nueva' });
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'moderation_failed' });
+    expect(await storedName()).toBe('Mercè');
+  });
+
+  it('devuelve 404 Usuario no registrado antes de validar el cuerpo', async () => {
+    for (const body of [{ name: 'Nueva' }, { name: '' }, {}]) {
+      const res = await patchMe(body, 'uid-sin-registro');
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'Usuario no registrado' });
+    }
+    expect(mockGroqCreate).not.toHaveBeenCalled();
   });
 });

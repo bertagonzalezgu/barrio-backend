@@ -1,6 +1,8 @@
 import { prisma } from '../config/prisma';
 import { Prisma, type ExchangeStatus, type User } from '../generated/prisma/client';
+import type { ParseResult } from './cardService';
 import { findUserId } from './exchangeService';
+import { parseRequiredText } from './textInput';
 import { grantWelcomeCredit } from './walletService';
 
 interface RegisterUserInput {
@@ -88,6 +90,30 @@ async function buildProfile(userId: string): Promise<PublicProfile | null> {
     exchangeCount,
     createdAt: registeredAt,
   };
+}
+
+const NAME_MAX_LENGTH = 80;
+
+export interface ProfileChanges {
+  name?: string;
+}
+
+// Solo se lee lo que se puede editar: el resto de campos del cuerpo (email, verified…) se ignora.
+export function parseProfileChanges(body: unknown): ParseResult<ProfileChanges> {
+  const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>;
+  if (input.name === undefined) return { ok: false, error: 'Envía name' };
+
+  const name = parseRequiredText(input, 'name', NAME_MAX_LENGTH);
+  if (!name.ok) return name;
+  return { ok: true, data: { name: name.data } };
+}
+
+// El nombre no se copia en ningún sitio: cards y chats lo leen con join, así que el cambio se ve en todas partes.
+export async function updateOwnProfile(userId: string, changes: ProfileChanges): Promise<PublicProfile> {
+  await prisma.user.update({ where: { id: userId }, data: changes });
+  const profile = await buildProfile(userId);
+  if (!profile) throw new Error(`No existe el usuario ${userId}`);
+  return profile;
 }
 
 // Mi perfil tiene la misma forma que el que ven las demás: el frontend usa un solo tipo para los dos.

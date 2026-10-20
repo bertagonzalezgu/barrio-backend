@@ -1,5 +1,7 @@
 import type { Request, Response } from 'express';
-import { getOwnProfile, getPublicProfile, registerUser } from '../services/userService';
+import { findUserId } from '../services/exchangeService';
+import { getOwnProfile, getPublicProfile, parseProfileChanges, registerUser, updateOwnProfile } from '../services/userService';
+import { rejectedByModeration } from './moderation';
 
 export async function registerCurrentUser(req: Request, res: Response): Promise<void> {
   if (!req.user) {
@@ -43,6 +45,30 @@ export async function getCurrentUser(req: Request, res: Response): Promise<void>
   }
 
   res.json(profile);
+}
+
+// Orden: 401 → 404 → 400 → 422. El nombre es texto libre y público, así que se modera como una card.
+export async function patchCurrentUser(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const userId = await findUserId(req.user.uid);
+  if (!userId) {
+    res.status(404).json({ error: 'Usuario no registrado' });
+    return;
+  }
+
+  const parsed = parseProfileChanges(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+
+  if (parsed.data.name !== undefined && (await rejectedByModeration(parsed.data.name, res))) return;
+
+  res.json(await updateOwnProfile(userId, parsed.data));
 }
 
 const PROFILE_ERRORS = {
