@@ -57,13 +57,18 @@ const COMPLETED_STATUSES: ExchangeStatus[] = ['confirmed', 'rated'];
 // Select explícito: del perfil de otra persona nunca sale su email, su firebaseUid ni nada del wallet.
 const PUBLIC_PROFILE_SELECT = { id: true, name: true, avatar: true, verified: true, registeredAt: true } as const;
 
-// La media no se guarda: se calcula al leer, igual que el saldo sale de TimeTransaction.
-// Así nunca puede quedar desfasada respecto a las valoraciones que hay de verdad.
 export async function getPublicProfile(firebaseUid: string, userId: string): Promise<PublicProfileResult> {
   if (!(await findUserId(firebaseUid))) return { ok: false, reason: 'user-not-found' };
 
+  const profile = await buildProfile(userId);
+  return profile ? { ok: true, profile } : { ok: false, reason: 'profile-not-found' };
+}
+
+// La media no se guarda: se calcula al leer, igual que el saldo sale de TimeTransaction.
+// Así nunca puede quedar desfasada respecto a las valoraciones que hay de verdad.
+async function buildProfile(userId: string): Promise<PublicProfile | null> {
   const found = await prisma.user.findUnique({ where: { id: userId }, select: PUBLIC_PROFILE_SELECT });
-  if (!found) return { ok: false, reason: 'profile-not-found' };
+  if (!found) return null;
   // En la API se llama createdAt, como en el resto de recursos; la columna es registeredAt.
   const { registeredAt, ...user } = found;
 
@@ -76,15 +81,12 @@ export async function getPublicProfile(firebaseUid: string, userId: string): Pro
   const average = ratings._avg.score;
 
   return {
-    ok: true,
-    profile: {
-      ...user,
-      // Sin valoraciones es null y no 0: un 0 se leería como "la peor nota".
-      ratingAverage: average === null ? null : Math.round(average * 10) / 10,
-      ratingCount: ratings._count,
-      exchangeCount,
-      createdAt: registeredAt,
-    },
+    ...user,
+    // Sin valoraciones es null y no 0: un 0 se leería como "la peor nota".
+    ratingAverage: average === null ? null : Math.round(average * 10) / 10,
+    ratingCount: ratings._count,
+    exchangeCount,
+    createdAt: registeredAt,
   };
 }
 
