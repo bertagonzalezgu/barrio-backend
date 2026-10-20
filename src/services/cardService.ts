@@ -1,5 +1,5 @@
 import { prisma } from '../config/prisma';
-import { CardCategory, CardType, type Card } from '../generated/prisma/client';
+import { CardCategory, CardType, type Card, type Prisma } from '../generated/prisma/client';
 
 export interface CreateCardInput {
   type: CardType;
@@ -21,10 +21,19 @@ export interface CardFilters {
 
 export type ParseResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
-type CreateCardResult = { ok: true; card: Card } | { ok: false; reason: 'user-not-found' };
+// firebaseUid solo se lee para calcular isMine: toCardResponse lo quita antes de responder.
+const AUTHOR_SELECT = { id: true, name: true, avatar: true, firebaseUid: true } as const;
 
-// La autora que ve el frontend: firebaseUid para saber si es la dueña, id/name/email para pintar el perfil.
-const AUTHOR_SELECT = { id: true, name: true, email: true, firebaseUid: true } as const;
+type CardWithAuthor = Prisma.CardGetPayload<{ include: { author: { select: typeof AUTHOR_SELECT } } }>;
+
+export type CardResponse = Card & { author: { id: string; name: string; avatar: string }; isMine: boolean };
+
+// Única forma en que una card sale del servidor: de la autora, solo lo que se pinta; nunca su email ni su firebaseUid.
+export function toCardResponse({ author: { firebaseUid: authorUid, ...author }, ...card }: CardWithAuthor, firebaseUid: string): CardResponse {
+  return { ...card, author, isMine: authorUid === firebaseUid };
+}
+
+type CreateCardResult = { ok: true; card: CardWithAuthor } | { ok: false; reason: 'user-not-found' };
 
 export const CARD_TYPES = Object.values(CardType);
 export const CARD_CATEGORIES = Object.values(CardCategory);
@@ -271,7 +280,10 @@ export async function createCard(firebaseUid: string, input: CreateCardInput): P
   const author = await prisma.user.findUnique({ where: { firebaseUid }, select: { id: true } });
   if (!author) return { ok: false, reason: 'user-not-found' };
 
-  const card = await prisma.card.create({ data: { ...input, authorId: author.id, status: 'active' } });
+  const card = await prisma.card.create({
+    data: { ...input, authorId: author.id, status: 'active' },
+    include: { author: { select: AUTHOR_SELECT } },
+  });
   return { ok: true, card };
 }
 

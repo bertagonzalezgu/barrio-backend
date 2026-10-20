@@ -1,6 +1,6 @@
 # Contrato de la API de valoraciones y perfil público (tarjeta 14)
 
-Comportamiento real de `barrio-backend` tras la tarjeta 14 (valoraciones, rama `feature/ratings`). Salvo donde pone *(sin test)*, cada afirmación está cubierta por un test en `src/routes/ratings.test.ts`, `src/routes/users.test.ts`, `src/routes/chat.test.ts` o `src/services/ratingService.test.ts`.
+Comportamiento real de `barrio-backend` tras la tarjeta 14 (valoraciones, rama `feature/ratings`). Salvo donde pone *(sin test)*, cada afirmación está cubierta por un test en `src/routes/ratings.test.ts`, `src/routes/users.test.ts`, `src/routes/cards.test.ts`, `src/routes/chat.test.ts` o `src/services/ratingService.test.ts`.
 
 Los cambios en el detalle del intercambio (`myRating` y la acción `rate`) están en [`chat-api-contract.md`](./chat-api-contract.md#get-apiexchangesid-detalle-del-intercambio).
 
@@ -116,3 +116,26 @@ Además de los comunes: `401` sin token y `404 Usuario no registrado` si quien p
 ## Cambios en `POST /api/users/me`
 
 Devuelve la usuaria completa, como antes, pero **sin el campo `rating`**: esa columna se ha eliminado, porque la media se calcula ahora en el perfil público. No había ningún consumidor que lo leyera.
+
+## Cambios en las respuestas de cards
+
+Afecta a todas las rutas que devuelven una card: `GET /api/cards`, `GET /api/cards/:id`, `POST /api/cards` y `PATCH /api/cards/:id`.
+
+- **`author`** pasa a ser solo `{ "id", "name", "avatar" }` (`avatar` es `""` si no tiene). Ya no incluye `email` ni `firebaseUid`: ninguna respuesta de cards los contiene, ni en `author` ni en ningún otro sitio del JSON.
+- **`isMine`** (nuevo, `boolean`): `true` si la card es de quien hace la petición. Sustituye a comparar `author.firebaseUid` con el uid de la sesión en el frontend.
+- **`POST /api/cards`** ahora también incluye `author` e `isMine` (siempre `true`); antes devolvía la card sin `author`.
+- **Permisos:** no cambian. Editar y borrar siguen comprobándose en el servidor contra la base de datos (`403` si no eres la autora). `isMine` sirve solo para pintar la interfaz.
+
+```json
+{
+  "id": "a7b8c9d0-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+  "authorId": "0d9c8b7a-6f5e-4d3c-2b1a-0f9e8d7c6b5a",
+  "author": { "id": "0d9c8b7a-6f5e-4d3c-2b1a-0f9e8d7c6b5a", "name": "Ana", "avatar": "" },
+  "isMine": false,
+  "type": "request",
+  "title": "Regar plantas",
+  "…": "el resto de campos de la card, sin cambios"
+}
+```
+
+Para el bloque de la autora (valoración media, intercambios, antigüedad), pide `GET /api/users/:id` con `author.id`.
