@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma';
 import { CardCategory, CardType, type Card, type Prisma } from '../generated/prisma/client';
+import { toSkipTake, type Pagination } from './pagination';
 
 export interface CreateCardInput {
   type: CardType;
@@ -293,6 +294,21 @@ export async function listActiveCards(filters: CardFilters) {
     orderBy: { createdAt: 'desc' },
     include: { author: { select: AUTHOR_SELECT } },
   });
+}
+
+// Solo las activas: en el perfil de otra persona no se ven sus cards completadas, denunciadas ni borradas.
+export async function listActiveCardsByAuthor(authorId: string, pagination: Pagination) {
+  const where = { authorId, status: 'active' } as const;
+  const [cards, total] = await Promise.all([
+    prisma.card.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: { author: { select: AUTHOR_SELECT } },
+      ...toSkipTake(pagination),
+    }),
+    prisma.card.count({ where }),
+  ]);
+  return { cards, total };
 }
 
 export async function findCardById(id: string) {

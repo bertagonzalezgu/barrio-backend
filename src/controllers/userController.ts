@@ -1,6 +1,9 @@
 import type { Request, Response } from 'express';
+import { listActiveCardsByAuthor, toCardResponse } from '../services/cardService';
 import { findUserId } from '../services/exchangeService';
-import { getOwnProfile, getPublicProfile, parseProfileChanges, registerUser, updateOwnProfile } from '../services/userService';
+import { parsePagination, type Pagination } from '../services/pagination';
+import { listPublicRatings } from '../services/ratingService';
+import { getOwnProfile, getPublicProfile, parseProfileChanges, registerUser, updateOwnProfile, userExists } from '../services/userService';
 import { rejectedByModeration } from './moderation';
 
 export async function registerCurrentUser(req: Request, res: Response): Promise<void> {
@@ -91,4 +94,47 @@ export async function getUserProfile(req: Request<{ id: string }>, res: Response
   }
 
   res.json(result.profile);
+}
+
+// Comprobaciones comunes de los listados de un perfil. Orden, como en PATCH /me: 401 → 404 (quien pregunta) → 400 → 404 (el perfil).
+// Devuelve null si ya ha respondido.
+async function profileListRequest(req: Request<{ id: string }>, res: Response): Promise<Pagination | null> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return null;
+  }
+
+  if (!(await findUserId(req.user.uid))) {
+    res.status(404).json({ error: PROFILE_ERRORS['user-not-found'] });
+    return null;
+  }
+
+  const pagination = parsePagination(req.query);
+  if (!pagination.ok) {
+    res.status(400).json({ error: pagination.error });
+    return null;
+  }
+
+  if (!(await userExists(req.params.id))) {
+    res.status(404).json({ error: PROFILE_ERRORS['profile-not-found'] });
+    return null;
+  }
+
+  return pagination.data;
+}
+
+export async function getUserCards(req: Request<{ id: string }>, res: Response): Promise<void> {
+  const pagination = await profileListRequest(req, res);
+  if (!pagination || !req.user) return;
+
+  const { uid } = req.user;
+  const { cards, total } = await listActiveCardsByAuthor(req.params.id, pagination);
+  res.json({ items: cards.map((card) => toCardResponse(card, uid)), total, ...pagination });
+}
+
+export async function getUserReviews(req: Request<{ id: string }>, res: Response): Promise<void> {
+  const pagination = await profileListRequest(req, res);
+  if (!pagination) return;
+
+  res.json(await listPublicRatings(req.params.id, pagination));
 }

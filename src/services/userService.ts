@@ -77,6 +77,10 @@ const PUBLIC_PROFILE_SELECT = {
   bio: true,
 } as const;
 
+export async function userExists(userId: string): Promise<boolean> {
+  return (await prisma.user.count({ where: { id: userId } })) > 0;
+}
+
 export async function getPublicProfile(firebaseUid: string, userId: string): Promise<PublicProfileResult> {
   if (!(await findUserId(firebaseUid))) return { ok: false, reason: 'user-not-found' };
 
