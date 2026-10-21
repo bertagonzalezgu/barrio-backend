@@ -15,7 +15,7 @@ El perfil público de otra persona (`GET /api/users/:id`) está en [`ratings-api
 
 **Petición:** sin cuerpo.
 
-**Respuesta `200`:** la misma forma que el perfil público, con los datos de quien pregunta. El frontend puede usar un solo tipo (`PublicProfile`) para los dos.
+**Respuesta `200`:** la misma forma que el perfil público, con los datos de quien pregunta. El frontend puede usar un solo tipo (`PublicProfile`) para los dos. *(Actualizado: ahora añade `onboardingCompletedAt`, que solo ve la propia persona; ver [`public-profiles-api-contract.md`](./public-profiles-api-contract.md).)*
 
 ```json
 {
@@ -81,7 +81,7 @@ avatar-07  avatar-08  avatar-09  avatar-10  avatar-11  avatar-12
 | Status | `error` | Cuándo |
 |---|---|---|
 | 404 | `Usuario no registrado` | El token es válido, pero esa usuaria no está registrada. Se responde así sea cual sea el cuerpo. |
-| 400 | `Envía name o avatar` | El cuerpo no trae ni `name` ni `avatar` (aunque traiga otros campos). |
+| 400 | `Envía al menos uno de: name, avatar, bio, interests, offers, onboardingCompleted` | El cuerpo no trae ninguno de los campos editables (aunque traiga otros). *(Actualizado: antes era `Envía name o avatar`; los campos nuevos están en [`public-profiles-api-contract.md`](./public-profiles-api-contract.md).)* |
 | 400 | `name es obligatorio y debe ser un texto` | `name` viene, pero no es una cadena o queda vacío al recortar. |
 | 400 | `name debe tener 80 caracteres como máximo` | `name` tiene más de 80 caracteres tras recortar. |
 | 400 | `avatar debe ser uno de: avatar-01, avatar-02, avatar-03, avatar-04, avatar-05, avatar-06, avatar-07, avatar-08, avatar-09, avatar-10, avatar-11, avatar-12 o "" para no tener avatar` | `avatar` viene y no es una clave de la lista ni `""` (un emoji, una URL, un número, `null`, una clave fuera de rango, con espacios o en mayúsculas…). |
