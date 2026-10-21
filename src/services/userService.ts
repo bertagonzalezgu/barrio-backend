@@ -113,6 +113,19 @@ export async function getReputation(userId: string): Promise<Reputation> {
   };
 }
 
+export interface AuthorSummary extends Reputation {
+  verified: boolean;
+}
+
+// Lo que el detalle de una card añade de su autora para el bloque de confianza, sin pedir el perfil entero.
+export async function getAuthorSummary(userId: string): Promise<AuthorSummary> {
+  const [{ verified }, reputation] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { verified: true } }),
+    getReputation(userId),
+  ]);
+  return { verified, ...reputation };
+}
+
 async function buildProfile(userId: string): Promise<PublicProfile | null> {
   const found = await prisma.user.findUnique({ where: { id: userId }, select: PUBLIC_PROFILE_SELECT });
   if (!found) return null;
