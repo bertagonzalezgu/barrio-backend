@@ -184,6 +184,15 @@ export async function postRating(req: Request<{ id: string }>, res: Response): P
       res.status(400).json({ error: result.error });
       return;
     }
+    // Mismas respuestas que rejectedByModeration: el frontend trata igual una card y un comentario rechazados.
+    if (result.reason === 'content-rejected') {
+      res.status(422).json({ error: 'content_rejected', message: result.message });
+      return;
+    }
+    if (result.reason === 'moderation-failed') {
+      res.status(500).json({ error: 'moderation_failed' });
+      return;
+    }
     sendFailure(res, result.reason);
     return;
   }

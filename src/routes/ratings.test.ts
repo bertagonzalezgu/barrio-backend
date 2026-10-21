@@ -4,9 +4,14 @@ import type { ExchangeStatus } from '../generated/prisma/client';
 import { getBalance } from '../services/walletService';
 
 const mockVerifyIdToken = vi.fn();
+const mockGroqCreate = vi.fn();
 
 vi.mock('../config/firebase', () => ({
   getAuth: () => ({ verifyIdToken: mockVerifyIdToken }),
+}));
+
+vi.mock('../config/groq', () => ({
+  getGroqClient: () => ({ chat: { completions: { create: mockGroqCreate } } }),
 }));
 
 import app from '../app';
@@ -19,7 +24,13 @@ const OUTSIDER_UID = 'uid-ajena';
 beforeEach(() => {
   mockVerifyIdToken.mockReset();
   mockVerifyIdToken.mockImplementation(async (token: string) => ({ uid: token }));
+  mockGroqCreate.mockReset();
+  moderationReturns({ seguro: true, motivo: 'ok' });
 });
+
+function moderationReturns(result: object) {
+  mockGroqCreate.mockResolvedValue({ choices: [{ message: { content: JSON.stringify(result) } }] });
+}
 
 function createUser(firebaseUid: string) {
   return prisma.user.create({ data: { firebaseUid, name: firebaseUid, email: `${firebaseUid}@barrio.local` } });
@@ -326,5 +337,85 @@ describe('POST /api/exchanges/:id/rating', () => {
 
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: 'Usuario no registrado' });
+  });
+});
+
+describe('POST /api/exchanges/:id/rating — moderación del comentario', () => {
+  it('un comentario que pasa moderación se guarda marcado como público', async () => {
+    const { exchange } = await setupExchange();
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 5, comment: 'Muy amable' });
+
+    expect(res.status).toBe(201);
+    expect(mockGroqCreate).toHaveBeenCalledTimes(1);
+    expect(await prisma.rating.findFirstOrThrow()).toMatchObject({ comment: 'Muy amable', commentModerated: true });
+  });
+
+  it('sin comentario no llama a la IA', async () => {
+    const { exchange } = await setupExchange();
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 5, comment: '   ' });
+
+    expect(res.status).toBe(201);
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await prisma.rating.findFirstOrThrow()).toMatchObject({ comment: null, commentModerated: false });
+  });
+
+  it('devuelve 422 con el message de la blocklist sin llamar a la IA y no guarda nada', async () => {
+    const { exchange } = await setupExchange();
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 5, comment: 'Escríbeme por whatsapp' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected', message: expect.any(String) });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+    expect(await prisma.rating.count()).toBe(0);
+  });
+
+  it('devuelve 422 content_rejected si la IA rechaza el comentario y no guarda nada', async () => {
+    const { exchange } = await setupExchange();
+    moderationReturns({ seguro: false, motivo: 'ofensivo' });
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 1, comment: 'Comentario ofensivo' });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected' });
+    expect(await prisma.rating.count()).toBe(0);
+    expect(await prisma.exchange.findUniqueOrThrow({ where: { id: exchange.id } })).toMatchObject({ status: 'confirmed' });
+  });
+
+  it('devuelve 500 moderation_failed si el clasificador falla y no guarda nada', async () => {
+    const { exchange } = await setupExchange();
+    mockGroqCreate.mockRejectedValue(new Error('network down'));
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 4, comment: 'Todo bien' });
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'moderation_failed' });
+    expect(await prisma.rating.count()).toBe(0);
+  });
+
+  // La moderación va al final: no se gasta una llamada a la IA en algo que se iba a rechazar igualmente.
+  it.each([
+    ['sin confirmar', 'accepted' as const, PROPOSER_UID, 409],
+    ['de una tercera persona', 'confirmed' as const, OUTSIDER_UID, 404],
+  ])('una valoración %s con comentario se rechaza sin moderar', async (_case, status, uid, code) => {
+    const { exchange } = await setupExchange(status);
+
+    const res = await rate(uid, exchange.id, { score: 4, comment: 'Escríbeme por whatsapp' });
+
+    expect(res.status).toBe(code);
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+
+  it('una segunda valoración con comentario devuelve 409 already_rated sin moderar', async () => {
+    const { exchange } = await setupExchange();
+    await rate(PROPOSER_UID, exchange.id, { score: 4 });
+
+    const res = await rate(PROPOSER_UID, exchange.id, { score: 4, comment: 'Otra vez' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'already_rated' });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
   });
 });
