@@ -47,7 +47,7 @@ export async function getCurrentUser(req: Request, res: Response): Promise<void>
   res.json(profile);
 }
 
-// Orden: 401 → 404 → 400 → 422. El nombre es texto libre y público, así que se modera como una card.
+// Orden: 401 → 404 → 400 → 422. El nombre y la bio son texto libre y público, así que se moderan como una card.
 export async function patchCurrentUser(req: Request, res: Response): Promise<void> {
   if (!req.user) {
     res.status(401).json({ error: 'No autenticado' });
@@ -66,7 +66,9 @@ export async function patchCurrentUser(req: Request, res: Response): Promise<voi
     return;
   }
 
-  if (parsed.data.name !== undefined && (await rejectedByModeration(parsed.data.name, res))) return;
+  // Juntos en una sola llamada, como título y descripción de una card. Una bio borrada (null) no se modera.
+  const textToModerate = [parsed.data.name, parsed.data.bio].filter(Boolean).join(' ');
+  if (textToModerate && (await rejectedByModeration(textToModerate, res))) return;
 
   res.json(await updateOwnProfile(userId, parsed.data));
 }

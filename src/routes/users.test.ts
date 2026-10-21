@@ -135,6 +135,10 @@ describe('GET /api/users/me', () => {
       ratingCount: 0,
       exchangeCount: 0,
       createdAt: me.registeredAt.toISOString(),
+      interests: [],
+      offers: [],
+      bio: null,
+      onboardingCompletedAt: null,
     });
   });
 
@@ -236,6 +240,9 @@ describe('GET /api/users/:id', () => {
       ratingCount: 1,
       exchangeCount: 1,
       createdAt: ana.registeredAt.toISOString(),
+      interests: [],
+      offers: [],
+      bio: null,
     });
     expect(JSON.stringify(res.body)).not.toContain('Secreto');
   });
@@ -383,6 +390,10 @@ describe('PATCH /api/users/me', () => {
       ratingCount: 0,
       exchangeCount: 0,
       createdAt: me.registeredAt.toISOString(),
+      interests: [],
+      offers: [],
+      bio: null,
+      onboardingCompletedAt: null,
     });
     expect(await storedName()).toBe('Mercè Puig');
   });
@@ -407,8 +418,8 @@ describe('PATCH /api/users/me', () => {
     ['de solo espacios', { name: '   ' }, 'name es obligatorio y debe ser un texto'],
     ['que no es un texto', { name: 42 }, 'name es obligatorio y debe ser un texto'],
     ['de más de 80 caracteres', { name: 'a'.repeat(81) }, 'name debe tener 80 caracteres como máximo'],
-    ['ausente', {}, 'Envía name o avatar'],
-    ['ausente con otros campos', { email: 'otra@barrio.local' }, 'Envía name o avatar'],
+    ['ausente', {}, 'Envía al menos uno de: name, avatar, bio, interests, offers, onboardingCompleted'],
+    ['ausente con otros campos', { email: 'otra@barrio.local' }, 'Envía al menos uno de: name, avatar, bio, interests, offers, onboardingCompleted'],
   ])('devuelve 400 con un nombre %s, sin moderar ni guardar nada', async (_case, body, error) => {
     await createMe();
 
@@ -605,5 +616,157 @@ describe('PATCH /api/users/me — el nombre nuevo se ve en cards y chats', () =>
     expect(res.status).toBe(200);
 
     expect(await namesSeenBy('uid-otra', card.id, exchange.id)).toEqual(['Mercè Puig', 'Mercè Puig', 'Mercè Puig', 'Mercè Puig']);
+  });
+});
+
+// Escritas a mano, como las claves de avatar: el test comprueba el contrato, no el enum.
+const ALL_CATEGORIES = [
+  'home_repairs', 'cleaning', 'moving', 'garden', 'peoplecare', 'petcare', 'health_support', 'learning',
+  'workshops', 'digital', 'cooking', 'transport', 'events', 'sports', 'creative_projects',
+];
+
+describe('PATCH /api/users/me — intereses, ofertas, bio y onboarding', () => {
+  const ME_UID = 'uid-me';
+
+  function moderationReturns(result: object) {
+    mockGroqCreate.mockResolvedValue({ choices: [{ message: { content: JSON.stringify(result) } }] });
+  }
+
+  beforeEach(() => {
+    mockVerifyIdToken.mockReset();
+    mockVerifyIdToken.mockImplementation(async (token: string) => ({ uid: token }));
+    mockGroqCreate.mockReset();
+    moderationReturns({ seguro: true, motivo: 'ok' });
+  });
+
+  function createMe() {
+    return prisma.user.create({ data: { firebaseUid: ME_UID, name: 'Mercè', email: 'me@barrio.local' } });
+  }
+
+  function patchMe(body: unknown) {
+    return request(app).patch('/api/users/me').set('Authorization', `Bearer ${ME_UID}`).send(body as object);
+  }
+
+  function storedMe() {
+    return prisma.user.findUniqueOrThrow({ where: { firebaseUid: ME_UID } });
+  }
+
+  it('guarda intereses y ofertas sin pasar por la moderación', async () => {
+    await createMe();
+
+    const res = await patchMe({ interests: ['garden', 'cooking'], offers: ['digital'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ interests: ['garden', 'cooking'], offers: ['digital'] });
+    expect(await storedMe()).toMatchObject({ interests: ['garden', 'cooking'], offers: ['digital'] });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+
+  it('acepta las 15 categorías y la lista vacía', async () => {
+    await createMe();
+
+    expect((await patchMe({ interests: ALL_CATEGORIES })).body.interests).toEqual(ALL_CATEGORIES);
+    expect((await patchMe({ interests: [] })).body.interests).toEqual([]);
+  });
+
+  it.each([
+    ['interests', 'una categoría que no existe', ['garden', 'astrologia'], 'interests debe ser una lista de categorías'],
+    ['offers', 'un texto suelto en vez de lista', 'garden', 'offers debe ser una lista de categorías'],
+    ['interests', 'null', null, 'interests debe ser una lista de categorías'],
+    ['offers', 'una categoría en mayúsculas', ['GARDEN'], 'offers debe ser una lista de categorías'],
+    ['interests', 'categorías repetidas', ['garden', 'garden'], 'interests no puede tener categorías repetidas'],
+    ['offers', 'más de 15 elementos', [...ALL_CATEGORIES, 'garden'], 'offers puede tener 15 categorías como máximo'],
+  ])('devuelve 400 si %s tiene %s y no guarda nada', async (field, _case, value, error) => {
+    await createMe();
+
+    const res = await patchMe({ [field]: value, name: 'Nueva' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain(error);
+    expect(await storedMe()).toMatchObject({ name: 'Mercè', interests: [], offers: [] });
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+
+  it('guarda la bio recortada y la modera junto al nombre en una sola llamada', async () => {
+    await createMe();
+
+    const res = await patchMe({ name: 'Mercè Puig', bio: '  Me encanta la jardinería  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.bio).toBe('Me encanta la jardinería');
+    expect(mockGroqCreate).toHaveBeenCalledTimes(1);
+    expect(mockGroqCreate.mock.calls[0][0].messages.at(-1).content).toBe('Mercè Puig Me encanta la jardinería');
+  });
+
+  it('una bio vacía la borra sin moderar', async () => {
+    const me = await createMe();
+    await prisma.user.update({ where: { id: me.id }, data: { bio: 'Antigua' } });
+
+    const res = await patchMe({ bio: '  ' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.bio).toBeNull();
+    expect(mockGroqCreate).not.toHaveBeenCalled();
+  });
+
+  it('acepta una bio de exactamente 280 caracteres', async () => {
+    await createMe();
+
+    expect((await patchMe({ bio: 'a'.repeat(280) })).status).toBe(200);
+  });
+
+  it.each([
+    ['de más de 280 caracteres', 'a'.repeat(281), 'bio debe tener 280 caracteres como máximo'],
+    ['que no es un texto', 42, 'bio debe ser un texto'],
+  ])('devuelve 400 con una bio %s', async (_case, bio, error) => {
+    await createMe();
+
+    const res = await patchMe({ bio });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error });
+  });
+
+  it('devuelve 422 con el message de la blocklist si la bio no pasa y no guarda nada', async () => {
+    await createMe();
+
+    const res = await patchMe({ bio: 'Escríbeme por whatsapp', interests: ['garden'] });
+
+    expect(res.status).toBe(422);
+    expect(res.body).toEqual({ error: 'content_rejected', message: expect.any(String) });
+    expect(await storedMe()).toMatchObject({ bio: null, interests: [] });
+  });
+
+  it('onboardingCompleted: true pone la fecha una sola vez y la devuelve en GET /me', async () => {
+    await createMe();
+
+    const first = await patchMe({ onboardingCompleted: true, interests: ['garden'] });
+    const firstDate = first.body.onboardingCompletedAt;
+    await patchMe({ onboardingCompleted: true });
+    const me = await request(app).get('/api/users/me').set('Authorization', `Bearer ${ME_UID}`);
+
+    expect(first.status).toBe(200);
+    expect(firstDate).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(me.body).toMatchObject({ onboardingCompletedAt: firstDate, interests: ['garden'] });
+  });
+
+  it.each([false, 'true', '2026-01-01T00:00:00.000Z'])('devuelve 400 con onboardingCompleted %s', async (value) => {
+    await createMe();
+
+    const res = await patchMe({ onboardingCompleted: value });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'onboardingCompleted solo admite true' });
+  });
+
+  it('el perfil público muestra intereses, ofertas y bio, pero no la fecha de onboarding', async () => {
+    const me = await createMe();
+    await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    await patchMe({ interests: ['garden'], offers: ['cooking'], bio: 'Hola', onboardingCompleted: true });
+
+    const res = await request(app).get(`/api/users/${me.id}`).set('Authorization', 'Bearer uid-otra');
+
+    expect(res.body).toMatchObject({ interests: ['garden'], offers: ['cooking'], bio: 'Hola' });
+    expect(res.body).not.toHaveProperty('onboardingCompletedAt');
   });
 });
