@@ -3,9 +3,15 @@ import { prisma } from '../config/prisma';
 import type { CardStatus, CardType, ExchangeStatus } from '../generated/prisma/client';
 
 const mockVerifyIdToken = vi.fn();
+const mockGroqCreate = vi.fn();
 
 vi.mock('../config/firebase', () => ({
   getAuth: () => ({ verifyIdToken: mockVerifyIdToken }),
+}));
+
+// Los comentarios de las valoraciones pasan por la IA de moderación: nunca se llama a la de verdad desde los tests.
+vi.mock('../config/groq', () => ({
+  getGroqClient: () => ({ chat: { completions: { create: mockGroqCreate } } }),
 }));
 
 import app from '../app';
@@ -19,6 +25,8 @@ const MISSING_ID = '00000000-0000-0000-0000-000000000000';
 beforeEach(() => {
   mockVerifyIdToken.mockReset();
   mockVerifyIdToken.mockImplementation(async (token: string) => ({ uid: token }));
+  mockGroqCreate.mockReset();
+  mockGroqCreate.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({ seguro: true, motivo: 'ok' }) } }] });
 });
 
 function createUser(firebaseUid: string) {
@@ -537,8 +545,12 @@ describe('privacidad del chat', () => {
   ] as const)('POST /:id/rating (%s valoración) no expone datos de contacto a %s', async (which, uid) => {
     const { author, proposer, exchange } = await setupExchange({ status: 'confirmed', confirmedBy: ['proposer', 'receiver'] });
     if (which === 'segunda') {
-      const other = uid === AUTHOR_UID ? PROPOSER_UID : AUTHOR_UID;
-      expect((await rate(other, exchange.id, { score: 5, comment: `Escríbeme a ${author.email}` })).status).toBe(201);
+      // Sembrada directamente: por la API la moderación ya no deja guardar un email. Es el caso de un comentario
+      // anterior a la moderación, y aun así no debe colarse en la respuesta de la otra persona.
+      const [rater, rated] = uid === AUTHOR_UID ? [proposer, author] : [author, proposer];
+      await prisma.rating.create({
+        data: { exchangeId: exchange.id, raterId: rater.id, ratedUserId: rated.id, score: 5, comment: `Escríbeme a ${author.email}` },
+      });
     }
 
     const res = await rate(uid, exchange.id, { score: 4, comment: 'Muy puntual' });
@@ -549,7 +561,10 @@ describe('privacidad del chat', () => {
 
   it('GET /api/users/:id no expone datos de contacto ni comentarios de la persona del perfil', async () => {
     const { author, proposer, exchange } = await setupExchange({ status: 'confirmed', confirmedBy: ['proposer', 'receiver'] });
-    await rate(PROPOSER_UID, exchange.id, { score: 5, comment: `Escríbeme a ${proposer.email}` });
+    // Sembrada directamente, como arriba: por la API la moderación rechazaría el email.
+    await prisma.rating.create({
+      data: { exchangeId: exchange.id, raterId: proposer.id, ratedUserId: author.id, score: 5, comment: `Escríbeme a ${proposer.email}` },
+    });
 
     const res = await request(app).get(`/api/users/${author.id}`).set('Authorization', `Bearer ${PROPOSER_UID}`);
 

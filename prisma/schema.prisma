@@ -70,6 +70,12 @@ model User {
 
   welcomeCreditGrantedAt DateTime?
 
+  // Categorías que le interesan y categorías que podría ofrecer: se eligen en el onboarding y se editan en el perfil.
+  interests             CardCategory[] @default([])
+  offers                CardCategory[] @default([])
+  bio                   String?        @db.VarChar(280)
+  onboardingCompletedAt DateTime?
+
   cards                Card[]
   proposedExchanges    Exchange[]        @relation("ExchangeProposer")
   receivedExchanges    Exchange[]        @relation("ExchangeReceiver")
@@ -193,16 +199,18 @@ model Message {
 
 // score va de 1 a 5: además de la validación de la API, la migración añade un CHECK en la base de datos.
 model Rating {
-  id          String   @id @default(uuid())
-  exchangeId  String
-  exchange    Exchange @relation(fields: [exchangeId], references: [id])
-  raterId     String
-  rater       User     @relation("RatingRater", fields: [raterId], references: [id])
-  ratedUserId String
-  ratedUser   User     @relation("RatingRated", fields: [ratedUserId], references: [id])
-  score       Int
-  comment     String?  @db.VarChar(500)
-  createdAt   DateTime @default(now())
+  id               String   @id @default(uuid())
+  exchangeId       String
+  exchange         Exchange @relation(fields: [exchangeId], references: [id])
+  raterId          String
+  rater            User     @relation("RatingRater", fields: [raterId], references: [id])
+  ratedUserId      String
+  ratedUser        User     @relation("RatingRated", fields: [ratedUserId], references: [id])
+  score            Int
+  comment          String?  @db.VarChar(500)
+  // Solo los comentarios que pasaron moderación son públicos; los guardados antes de moderarlos se quedan en false.
+  commentModerated Boolean  @default(false)
+  createdAt        DateTime @default(now())
 
   @@unique([exchangeId, raterId])
   @@index([ratedUserId])
