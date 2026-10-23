@@ -7,7 +7,7 @@ Comportamiento real de `barrio-backend` tras la rama `feature/reviews-public-pro
 - **Autenticación:** todas las rutas exigen `Authorization: Bearer <idToken de Firebase>`. Sin token: `401`.
 - **Fechas y formato de errores:** los mismos que en el [contrato del chat](./chat-api-contract.md#convenciones-comunes).
 - **Categorías:** los valores del enum `CardCategory`, los mismos que usan las cards: `home_repairs`, `cleaning`, `moving`, `garden`, `peoplecare`, `petcare`, `health_support`, `learning`, `workshops`, `digital`, `cooking`, `transport`, `events`, `sports`, `creative_projects`.
-- **Privacidad:** ninguna respuesta incluye email, `firebaseUid` ni ubicación. Los usuarios no tienen ubicación propia; solo las cards tienen `lat`/`lng`.
+- **Privacidad:** ninguna respuesta incluye email ni `firebaseUid`. Los usuarios no tienen ubicación propia; solo las cards tienen `lat`/`lng`. *(Corregido en `feature/map`: las cards de `GET /api/users/:id/cards` sí llevan `lat`/`lng`, exactos para su autora y aproximados para el resto; ver [`map-api-contract.md`](./map-api-contract.md#ubicación-en-las-demás-respuestas-de-cards).)*
 - **Moderación:** el texto libre que se publica (nombre, bio, comentario de una valoración) pasa por el mismo filtro que las cards: primero la blocklist y después la IA. Si se rechaza, la respuesta es `422 { "error": "content_rejected", "message"? }`. Si el clasificador falla, es `500 { "error": "moderation_failed" }`. En los dos casos no se guarda nada.
 
 ### Paginación
