@@ -46,7 +46,19 @@ function getMapAs(uid: string, query: Record<string, string> = {}) {
 
 describe('GET /api/cards/map', () => {
   it('devuelve 401 sin token', async () => {
-    expect((await request(app).get('/api/cards/map')).status).toBe(401);
+    const res = await request(app).get('/api/cards/map');
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'Token no proporcionado' });
+  });
+
+  it('devuelve 401 con un token inválido', async () => {
+    mockVerifyIdToken.mockRejectedValueOnce(new Error('invalid'));
+
+    const res = await getMapAs('token-caducado');
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({ error: 'Token inválido o expirado' });
   });
 
   it('devuelve solo las cards activas con lat y lng', async () => {
@@ -92,6 +104,18 @@ describe('GET /api/cards/map', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.map((card: { id: string }) => card.id)).toEqual([offer.id]);
+  });
+
+  it('combina category y type', async () => {
+    const ana = await createUser('uid-ana');
+    const digitalOffer = await createCard(ana.id, { category: 'digital', type: 'offer' });
+    await createCard(ana.id, { category: 'digital', type: 'request' });
+    await createCard(ana.id, { category: 'garden', type: 'offer' });
+
+    const res = await getMapAs('uid-ana', { category: 'digital', type: 'offer' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((card: { id: string }) => card.id)).toEqual([digitalOffer.id]);
   });
 
   it.each([

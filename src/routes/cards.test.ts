@@ -507,6 +507,15 @@ describe('PATCH /api/cards/:id', () => {
     expect(await prisma.card.findUnique({ where: { id: card.id } })).toMatchObject(changes);
   });
 
+  it('devuelve a la autora la ubicación exacta, sin redondear', async () => {
+    const card = await seedCard();
+
+    const res = await patchCardAs(AUTHOR_UID, card.id, { lat: 41.38512, lng: 2.17368 });
+
+    expect(res.status).toBe(200);
+    expect({ lat: res.body.lat, lng: res.body.lng }).toEqual({ lat: 41.38512, lng: 2.17368 });
+  });
+
   it('solo cambia los campos enviados', async () => {
     const card = await seedCard();
 
