@@ -4,10 +4,12 @@ import {
   deleteCard,
   findCardById,
   listActiveCards,
+  listCalendarCards,
   listMapCards,
   parseCardFilters,
   parseCreateCardInput,
   parseUpdateCardInput,
+  toCalendarCardResponse,
   toCardResponse,
   toMapCardResponse,
   updateCard,
@@ -64,6 +66,22 @@ export async function getMapCards(req: Request, res: Response): Promise<void> {
   }
 
   res.json((await listMapCards(filters.data)).map(toMapCardResponse));
+}
+
+export async function getCalendarCards(req: Request, res: Response): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: 'No autenticado' });
+    return;
+  }
+
+  const filters = parseCardFilters(req.query);
+  if (!filters.ok) {
+    res.status(400).json({ error: filters.error });
+    return;
+  }
+
+  const { uid } = req.user;
+  res.json((await listCalendarCards(filters.data)).map((card) => toCalendarCardResponse(card, uid)));
 }
 
 export async function generateCard(req: Request, res: Response): Promise<void> {
