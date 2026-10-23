@@ -2,12 +2,20 @@ import 'dotenv/config';
 import { prisma } from '../config/prisma';
 import type { CardCategory, CardStatus, CardType } from '../generated/prisma/client';
 
-// Datos de demo para el mapa (tarjeta 16). Idempotente: ids y firebaseUid fijos, así que ejecutarlo dos veces deja lo mismo.
+// Datos de demo para el mapa (tarjeta 16) y el calendario (tarjeta 17). Idempotente: ids y firebaseUid fijos, así que
+// ejecutarlo dos veces deja las mismas usuarias y cards. Las fechas son relativas al día en que se ejecuta, para que la
+// demo no caduque: cada ejecución las mueve con el día.
 
 interface DemoUser {
   firebaseUid: string;
   name: string;
   email: string;
+}
+
+// Días respecto a hoy (UTC). La duración es inclusiva, como en la API: 1 día empieza y acaba el mismo día.
+interface DemoSchedule {
+  startOffsetDays: number;
+  durationDays: number;
 }
 
 interface DemoCard {
@@ -22,6 +30,7 @@ interface DemoCard {
   lat: number | null;
   lng: number | null;
   status?: CardStatus;
+  schedule?: DemoSchedule;
 }
 
 const USERS: DemoUser[] = [
@@ -43,6 +52,7 @@ const CARDS: DemoCard[] = [
     hours: 2,
     lat: 41.40363,
     lng: 2.17436,
+    schedule: { startOffsetDays: 2, durationDays: 1 },
   },
   {
     id: '00000000-0000-4000-8000-000000016002',
@@ -55,6 +65,7 @@ const CARDS: DemoCard[] = [
     hours: 1,
     lat: 41.39535,
     lng: 2.16188,
+    schedule: { startOffsetDays: 2, durationDays: 1 },
   },
   {
     id: '00000000-0000-4000-8000-000000016003',
@@ -67,6 +78,7 @@ const CARDS: DemoCard[] = [
     hours: 3,
     lat: 41.38795,
     lng: 2.15438,
+    schedule: { startOffsetDays: 6, durationDays: 1 },
   },
   {
     id: '00000000-0000-4000-8000-000000016004',
@@ -93,6 +105,7 @@ const CARDS: DemoCard[] = [
     hours: 1,
     lat: 41.4021,
     lng: 2.15696,
+    schedule: { startOffsetDays: -3, durationDays: 5 },
   },
   {
     id: '00000000-0000-4000-8000-000000016006',
@@ -117,6 +130,7 @@ const CARDS: DemoCard[] = [
     hours: 2,
     lat: 41.40461,
     lng: 2.15985,
+    schedule: { startOffsetDays: 7, durationDays: 14 },
   },
   // Poblenou
   {
@@ -130,6 +144,7 @@ const CARDS: DemoCard[] = [
     hours: 2,
     lat: 41.40312,
     lng: 2.20248,
+    schedule: { startOffsetDays: 13, durationDays: 1 },
   },
   {
     id: '00000000-0000-4000-8000-000000016009',
@@ -142,6 +157,7 @@ const CARDS: DemoCard[] = [
     hours: 1,
     lat: 41.40446,
     lng: 2.19733,
+    schedule: { startOffsetDays: 4, durationDays: 1 },
   },
   {
     id: '00000000-0000-4000-8000-000000016010',
@@ -154,8 +170,10 @@ const CARDS: DemoCard[] = [
     hours: 1,
     lat: 41.39468,
     lng: 2.207,
+    schedule: { startOffsetDays: -5, durationDays: 1 },
   },
-  // No deben salir en el mapa: sin coordenadas, completada y denunciada.
+  // No deben salir en el mapa: sin coordenadas, completada y denunciada. En el calendario sí sale la primera
+  // (activa con fechas aunque no tenga ubicación); las otras dos tienen fechas pero no están activas.
   {
     id: '00000000-0000-4000-8000-000000016011',
     author: 'demo-map-merce',
@@ -167,6 +185,7 @@ const CARDS: DemoCard[] = [
     hours: 2,
     lat: null,
     lng: null,
+    schedule: { startOffsetDays: 9, durationDays: 1 },
   },
   {
     id: '00000000-0000-4000-8000-000000016012',
@@ -180,6 +199,7 @@ const CARDS: DemoCard[] = [
     lat: 41.39971,
     lng: 2.19458,
     status: 'completed',
+    schedule: { startOffsetDays: 3, durationDays: 1 },
   },
   {
     id: '00000000-0000-4000-8000-000000016013',
@@ -193,8 +213,24 @@ const CARDS: DemoCard[] = [
     lat: 41.39968,
     lng: 2.15356,
     status: 'reported',
+    schedule: { startOffsetDays: 6, durationDays: 2 },
   },
 ];
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// Medianoche UTC, igual que guarda la API las fechas de calendario.
+function todayUtc(): Date {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+// Sin schedule, null explícito: el upsert también borra las fechas puestas a mano.
+function toDates(today: Date, schedule: DemoSchedule | undefined): { startDate: Date | null; endDate: Date | null } {
+  if (!schedule) return { startDate: null, endDate: null };
+  const startDate = new Date(today.getTime() + schedule.startOffsetDays * MS_PER_DAY);
+  return { startDate, endDate: new Date(startDate.getTime() + (schedule.durationDays - 1) * MS_PER_DAY) };
+}
 
 // Solo el host: la URL lleva usuario y contraseña.
 function databaseHost(): string {
@@ -228,15 +264,17 @@ const run = async (): Promise<void> => {
   }
   console.log(`✅ Usuarias de demo: ${USERS.length}`);
 
-  for (const { author, status = 'active', ...card } of CARDS) {
+  const today = todayUtc();
+  for (const { author, status = 'active', schedule, ...card } of CARDS) {
     const authorId = userIds.get(author);
     if (!authorId) throw new Error(`La card ${card.id} apunta a una autora que no está en USERS: ${author}`);
     // En update se reescriben todos los campos, así que una card editada a mano vuelve a su estado de demo.
-    const data = { ...card, authorId, status };
+    const data = { ...card, ...toDates(today, schedule), authorId, status };
     await prisma.card.upsert({ where: { id: card.id }, create: data, update: data });
   }
   const onMap = CARDS.filter((card) => (card.status ?? 'active') === 'active' && card.lat !== null).length;
-  console.log(`✅ Cards de demo: ${CARDS.length} (${onMap} visibles en el mapa)`);
+  const onCalendar = CARDS.filter((card) => (card.status ?? 'active') === 'active' && card.schedule).length;
+  console.log(`✅ Cards de demo: ${CARDS.length} (${onMap} visibles en el mapa, ${onCalendar} en el calendario)`);
 };
 
 run()

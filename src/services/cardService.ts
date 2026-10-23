@@ -325,6 +325,23 @@ export function toMapCardResponse({ lat, lng, ...card }: LocatedMapCard): Locate
   return { ...card, ...toApproximateCoordinates(lat, lng) };
 }
 
+// Las de cualquier autora. El id desempata los días con varias cards, para que el orden no cambie entre peticiones.
+export async function listCalendarCards(filters: CardFilters) {
+  return prisma.card.findMany({
+    where: { ...filters, status: 'active', startDate: { not: null }, endDate: { not: null } },
+    orderBy: [{ startDate: 'asc' }, { id: 'asc' }],
+    include: { author: { select: AUTHOR_SELECT } },
+  });
+}
+
+export type CalendarCardResponse = Omit<CardResponse, 'lat' | 'lng'>;
+
+// Como toCardResponse, pero sin ubicación: el calendario no la pinta y así no sale de más.
+export function toCalendarCardResponse(card: CardWithAuthor, firebaseUid: string): CalendarCardResponse {
+  const { lat: _lat, lng: _lng, ...response } = toCardResponse(card, firebaseUid);
+  return response;
+}
+
 // Solo las activas: en el perfil de otra persona no se ven sus cards completadas, denunciadas ni borradas.
 export async function listActiveCardsByAuthor(authorId: string, pagination: Pagination) {
   const where = { authorId, status: 'active' } as const;
