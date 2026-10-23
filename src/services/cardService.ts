@@ -31,8 +31,11 @@ type CardWithAuthor = Prisma.CardGetPayload<{ include: { author: { select: typeo
 export type CardResponse = Card & { author: { id: string; name: string; avatar: string }; isMine: boolean };
 
 // Única forma en que una card sale del servidor: de la autora, solo lo que se pinta; nunca su email ni su firebaseUid.
+// La ubicación exacta solo la ve la autora; el resto recibe la misma celda aproximada que el mapa.
 export function toCardResponse({ author: { firebaseUid: authorUid, ...author }, ...card }: CardWithAuthor, firebaseUid: string): CardResponse {
-  return { ...card, author, isMine: authorUid === firebaseUid };
+  const isMine = authorUid === firebaseUid;
+  const location = isMine || card.lat === null || card.lng === null ? {} : toApproximateCoordinates(card.lat, card.lng);
+  return { ...card, ...location, author, isMine };
 }
 
 type CreateCardResult = { ok: true; card: CardWithAuthor } | { ok: false; reason: 'user-not-found' };

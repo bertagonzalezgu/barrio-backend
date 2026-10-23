@@ -785,3 +785,49 @@ describe('author e isMine en las respuestas de cards', () => {
     expect(res.body.author.avatar).toBe('avatar-02');
   });
 });
+
+// Solo la autora ve dónde está exactamente su card; al resto le llega la misma celda aproximada que en el mapa.
+describe('ubicación en las respuestas de cards', () => {
+  const OTHER_UID = 'uid-otra';
+  const EXACT = { lat: 41.38512, lng: 2.17368 };
+  const APPROXIMATE = { lat: 41.385, lng: 2.174 };
+  const NO_LOCATION = { lat: null, lng: null };
+
+  async function seed(location: { lat: number | null; lng: number | null }) {
+    const author = await createAuthor();
+    await prisma.user.create({ data: { firebaseUid: OTHER_UID, name: 'Otra', email: 'otra@barrio.local' } });
+    return prisma.card.create({ data: { ...requiredFields, ...location, authorId: author.id } });
+  }
+
+  async function locationSeenBy(uid: string, endpoint: 'listado' | 'detalle', cardId: string) {
+    mockVerifyIdToken.mockResolvedValueOnce({ uid } as never);
+    const path = endpoint === 'listado' ? '/api/cards' : `/api/cards/${cardId}`;
+    const res = await request(app).get(path).set('Authorization', `Bearer ${uid}`);
+
+    expect(res.status).toBe(200);
+    const card = endpoint === 'listado' ? res.body[0] : res.body;
+    return { lat: card.lat, lng: card.lng };
+  }
+
+  it.each([
+    ['listado', 'la autora ve las coordenadas exactas', AUTHOR_UID, EXACT],
+    ['listado', 'otra persona las ve redondeadas a 3 decimales', OTHER_UID, APPROXIMATE],
+    ['detalle', 'la autora ve las coordenadas exactas', AUTHOR_UID, EXACT],
+    ['detalle', 'otra persona las ve redondeadas a 3 decimales', OTHER_UID, APPROXIMATE],
+  ] as const)('en el %s, %s', async (endpoint, _case, uid, expected) => {
+    const card = await seed(EXACT);
+
+    expect(await locationSeenBy(uid, endpoint, card.id)).toEqual(expected);
+  });
+
+  it.each([
+    ['listado', AUTHOR_UID],
+    ['listado', OTHER_UID],
+    ['detalle', AUTHOR_UID],
+    ['detalle', OTHER_UID],
+  ] as const)('en el %s, una card sin ubicación devuelve lat y lng null para %s', async (endpoint, uid) => {
+    const card = await seed(NO_LOCATION);
+
+    expect(await locationSeenBy(uid, endpoint, card.id)).toEqual(NO_LOCATION);
+  });
+});

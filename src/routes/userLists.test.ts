@@ -129,6 +129,30 @@ describe('GET /api/users/:id/cards', () => {
     expect(beyond.body).toEqual({ items: [], page: 9, pageSize: 2, total: 5 });
   });
 
+  it.each([
+    ['la autora ve las coordenadas exactas', 'uid-ana', { lat: 41.38512, lng: 2.17368 }],
+    ['otra persona las ve redondeadas a 3 decimales', 'uid-visita', { lat: 41.385, lng: 2.174 }],
+  ])('%s', async (_case, uid, expected) => {
+    await createUser('uid-visita');
+    const ana = await createUser('uid-ana');
+    const card = await createCard(ana.id, 'Con ubicación');
+    await prisma.card.update({ where: { id: card.id }, data: { lat: 41.38512, lng: 2.17368 } });
+
+    const [listed] = (await getAs(uid, `/api/users/${ana.id}/cards`)).body.items;
+
+    expect({ lat: listed.lat, lng: listed.lng }).toEqual(expected);
+  });
+
+  it.each(['uid-ana', 'uid-visita'])('una card sin ubicación devuelve lat y lng null para %s', async (uid) => {
+    await createUser('uid-visita');
+    const ana = await createUser('uid-ana');
+    await createCard(ana.id, 'Sin ubicación');
+
+    const [listed] = (await getAs(uid, `/api/users/${ana.id}/cards`)).body.items;
+
+    expect({ lat: listed.lat, lng: listed.lng }).toEqual({ lat: null, lng: null });
+  });
+
   it('sin cards devuelve una lista vacía', async () => {
     const ana = await createUser('uid-ana');
 
