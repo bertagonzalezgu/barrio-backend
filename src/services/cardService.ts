@@ -1,5 +1,6 @@
 import { prisma } from '../config/prisma';
 import { CardCategory, CardType, type Card, type Prisma } from '../generated/prisma/client';
+import { toApproximateCoordinates, type Coordinates } from './coordinates';
 import { toSkipTake, type Pagination } from './pagination';
 
 export interface CreateCardInput {
@@ -294,6 +295,31 @@ export async function listActiveCards(filters: CardFilters) {
     orderBy: { createdAt: 'desc' },
     include: { author: { select: AUTHOR_SELECT } },
   });
+}
+
+// Solo lo que pinta un pin del mapa: ni descripción ni autor.
+const MAP_CARD_SELECT = { id: true, type: true, category: true, title: true, icon: true, hours: true, lat: true, lng: true } as const;
+
+type MapCard = Prisma.CardGetPayload<{ select: typeof MAP_CARD_SELECT }>;
+type LocatedMapCard = MapCard & Coordinates;
+
+// El where ya excluye las cards sin ubicación; el guard se lo dice también al tipo.
+function hasCoordinates(card: MapCard): card is LocatedMapCard {
+  return card.lat !== null && card.lng !== null;
+}
+
+export async function listMapCards(filters: CardFilters): Promise<LocatedMapCard[]> {
+  const cards = await prisma.card.findMany({
+    where: { ...filters, status: 'active', lat: { not: null }, lng: { not: null } },
+    orderBy: { createdAt: 'desc' },
+    select: MAP_CARD_SELECT,
+  });
+  return cards.filter(hasCoordinates);
+}
+
+// El mapa es público: también las cards propias salen aproximadas.
+export function toMapCardResponse({ lat, lng, ...card }: LocatedMapCard): LocatedMapCard {
+  return { ...card, ...toApproximateCoordinates(lat, lng) };
 }
 
 // Solo las activas: en el perfil de otra persona no se ven sus cards completadas, denunciadas ni borradas.
