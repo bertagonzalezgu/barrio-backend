@@ -7,6 +7,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "ts-node src/server.ts",
+    "seed:map": "ts-node src/scripts/seedMap.ts",
     "postinstall": "prisma generate"
   },
   "keywords": [],

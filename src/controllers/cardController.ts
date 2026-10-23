@@ -4,10 +4,12 @@ import {
   deleteCard,
   findCardById,
   listActiveCards,
+  listMapCards,
   parseCardFilters,
   parseCreateCardInput,
   parseUpdateCardInput,
   toCardResponse,
+  toMapCardResponse,
   updateCard,
 } from '../services/cardService';
 import { generateCardWithAI, parseGenerateCardInput } from '../services/aiCardService';
@@ -52,6 +54,16 @@ export async function getCards(req: Request, res: Response): Promise<void> {
 
   const { uid } = req.user;
   res.json((await listActiveCards(filters.data)).map((card) => toCardResponse(card, uid)));
+}
+
+export async function getMapCards(req: Request, res: Response): Promise<void> {
+  const filters = parseCardFilters(req.query);
+  if (!filters.ok) {
+    res.status(400).json({ error: filters.error });
+    return;
+  }
+
+  res.json((await listMapCards(filters.data)).map(toMapCardResponse));
 }
 
 export async function generateCard(req: Request, res: Response): Promise<void> {
