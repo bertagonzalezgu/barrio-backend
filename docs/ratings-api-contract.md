@@ -9,7 +9,7 @@ Los cambios en el detalle del intercambio (`myRating` y la acción `rate`) está
 - **Autenticación:** las dos rutas exigen `Authorization: Bearer <idToken de Firebase>`.
 - **Fechas, formato de errores y errores comunes** (401, `404 Usuario no registrado`, `400 invalid_request`, `500 internal_error`): los mismos que en el [contrato del chat](./chat-api-contract.md#convenciones-comunes).
 - **Escala:** `score` es un entero de 1 a 5. La base de datos también lo comprueba (`CHECK`), aunque una petición nunca llega a ella con otro valor.
-- **Privacidad:** ninguna respuesta incluye email, `firebaseUid`, teléfono ni datos del wallet. Los comentarios de las valoraciones no salen en ningún endpoint: solo los ve quien los escribió, en su propio `myRating`.
+- **Privacidad:** ninguna respuesta incluye email, `firebaseUid`, teléfono ni datos del wallet. *(Actualizado en `feature/reviews-public-profiles`: los comentarios ahora se moderan al valorar y son públicos en `GET /api/users/:id/reviews`; ver [`public-profiles-api-contract.md`](./public-profiles-api-contract.md).)*
 - **La valoración no es obligatoria:** no valorar no bloquea nada (ni el chat, ni el wallet, ni otras acciones). Valorar tampoco toca el saldo: no crea ni cambia ninguna `TimeTransaction`.
 
 ## `POST /api/exchanges/:id/rating`: valorar a la otra persona
@@ -138,4 +138,4 @@ Afecta a todas las rutas que devuelven una card: `GET /api/cards`, `GET /api/car
 }
 ```
 
-Para el bloque de la autora (valoración media, intercambios, antigüedad), pide `GET /api/users/:id` con `author.id`.
+Para el bloque de la autora (valoración media, intercambios, antigüedad), pide `GET /api/users/:id` con `author.id`. *(Actualizado: el detalle `GET /api/cards/:id` ya trae ese resumen en `author`; ver [`public-profiles-api-contract.md`](./public-profiles-api-contract.md).)*

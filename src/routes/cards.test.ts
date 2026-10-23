@@ -336,7 +336,7 @@ describe('GET /api/cards/:id', () => {
     expect(res.status).toBe(401);
   });
 
-  it('devuelve la card con su autor', async () => {
+  it('devuelve la card con su autor y el resumen de confianza, sin datos privados', async () => {
     const author = await createAuthor();
     const card = await prisma.card.create({ data: { ...requiredFields, authorId: author.id } });
 
@@ -344,7 +344,34 @@ describe('GET /api/cards/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ...requiredFields, id: card.id, authorId: author.id });
-    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', avatar: '' });
+    expect(res.body.author).toEqual({
+      id: author.id,
+      name: 'Autora',
+      avatar: '',
+      verified: false,
+      ratingAverage: null,
+      ratingCount: 0,
+      exchangeCount: 0,
+    });
+  });
+
+  it('el resumen del autor coincide con su perfil público', async () => {
+    const author = await prisma.user.create({ data: { firebaseUid: AUTHOR_UID, name: 'Autora', email: 'autora@barrio.local', verified: true } });
+    const other = await prisma.user.create({ data: { firebaseUid: 'uid-otra', name: 'Otra', email: 'otra@barrio.local' } });
+    const done = await prisma.card.create({ data: { ...requiredFields, authorId: author.id, status: 'completed' } });
+    const exchange = await prisma.exchange.create({
+      data: { cardId: done.id, proposerId: other.id, receiverId: author.id, hours: 1, status: 'confirmed' },
+    });
+    await prisma.rating.create({ data: { exchangeId: exchange.id, raterId: other.id, ratedUserId: author.id, score: 4 } });
+    const card = await prisma.card.create({ data: { ...requiredFields, authorId: author.id } });
+
+    const res = await getCard(card.id);
+    mockVerifyIdToken.mockResolvedValueOnce({ uid: AUTHOR_UID } as never);
+    const profile = await request(app).get(`/api/users/${author.id}`).set('Authorization', 'Bearer token-valido');
+
+    expect(res.body.author).toMatchObject({ verified: true, ratingAverage: 4, ratingCount: 1, exchangeCount: 1 });
+    const { id, name, avatar, verified, ratingAverage, ratingCount, exchangeCount } = profile.body;
+    expect(res.body.author).toEqual({ id, name, avatar, verified, ratingAverage, ratingCount, exchangeCount });
   });
 
   it('devuelve 404 si la card no existe', async () => {
@@ -708,13 +735,21 @@ describe('author e isMine en las respuestas de cards', () => {
   it.each([
     [AUTHOR_UID, true],
     [OTHER_UID, false],
-  ])('en el detalle, %s ve isMine %s y un author mínimo', async (uid, isMine) => {
+  ])('en el detalle, %s ve isMine %s y el author con su resumen de confianza', async (uid, isMine) => {
     const { author, card } = await seed();
 
     const res = await request(app).get(`/api/cards/${card.id}`).set('Authorization', as(uid));
 
     expect(res.status).toBe(200);
-    expect(res.body.author).toEqual({ id: author.id, name: 'Autora', avatar: '' });
+    expect(res.body.author).toEqual({
+      id: author.id,
+      name: 'Autora',
+      avatar: '',
+      verified: false,
+      ratingAverage: null,
+      ratingCount: 0,
+      exchangeCount: 0,
+    });
     expect(res.body.isMine).toBe(isMine);
     expectNoPrivateData(res.body);
   });

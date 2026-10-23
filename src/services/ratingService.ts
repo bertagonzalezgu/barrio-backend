@@ -12,6 +12,7 @@ import {
   type ExchangeDetail,
   type ExchangeFailure,
 } from './exchangeService';
+import { toSkipTake, type Page, type Pagination } from './pagination';
 import { parseOptionalText } from './textInput';
 
 const COMMENT_MAX_LENGTH = 500;
@@ -30,6 +31,51 @@ export function parseRatingInput(body: unknown): ParseResult<RatingInput> {
   const comment = parseOptionalText(body, 'comment', COMMENT_MAX_LENGTH);
   if (!comment.ok) return comment;
   return { ok: true, data: { score, comment: comment.data } };
+}
+
+export interface PublicRating {
+  id: string;
+  score: number;
+  comment: string | null;
+  createdAt: Date;
+  author: { name: string; avatar: string };
+}
+
+// "Carlos Pérez García" → "Carlos P.". Basta para reconocer a alguien sin publicar su nombre completo junto a su opinión.
+export function abbreviateName(name: string): string {
+  const [first, second] = name.trim().split(/\s+/);
+  if (!second) return first;
+  const [initial] = Array.from(second);
+  return `${first} ${initial.toUpperCase()}.`;
+}
+
+// Sin id de autora: con él se llegaría a su perfil y al nombre completo, que es justo lo que se abrevia.
+export async function listPublicRatings(ratedUserId: string, pagination: Pagination): Promise<Page<PublicRating>> {
+  const where = { ratedUserId };
+  const [ratings, total] = await Promise.all([
+    prisma.rating.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        score: true,
+        comment: true,
+        commentModerated: true,
+        createdAt: true,
+        rater: { select: { name: true, avatar: true } },
+      },
+      ...toSkipTake(pagination),
+    }),
+    prisma.rating.count({ where }),
+  ]);
+
+  const items = ratings.map(({ commentModerated, comment, rater, ...rating }) => ({
+    ...rating,
+    // Los comentarios guardados cuando aún eran privados no pasaron moderación: no se publican.
+    comment: commentModerated ? comment : null,
+    author: { name: abbreviateName(rater.name), avatar: rater.avatar },
+  }));
+  return { items, total, ...pagination };
 }
 
 export type ModerationFailure =

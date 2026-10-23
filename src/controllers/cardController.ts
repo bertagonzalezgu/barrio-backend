@@ -11,6 +11,7 @@ import {
   updateCard,
 } from '../services/cardService';
 import { generateCardWithAI, parseGenerateCardInput } from '../services/aiCardService';
+import { getAuthorSummary } from '../services/userService';
 import { rejectedByModeration } from './moderation';
 
 export async function postCard(req: Request, res: Response): Promise<void> {
@@ -85,7 +86,9 @@ export async function getCardById(req: Request<{ id: string }>, res: Response): 
     return;
   }
 
-  res.json(toCardResponse(card, req.user.uid));
+  // Solo en el detalle: en el listado serían varias consultas más por cada card.
+  const response = toCardResponse(card, req.user.uid);
+  res.json({ ...response, author: { ...response.author, ...(await getAuthorSummary(card.authorId)) } });
 }
 
 const DELETE_ERRORS = {
