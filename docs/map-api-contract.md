@@ -39,7 +39,7 @@ Se pueden combinar. Son los mismos filtros que `GET /api/cards`, con las mismas 
     "type": "offer",
     "category": "home_repairs",
     "title": "Arreglo grifos",
-    "icon": "wrench",
+    "icon": "home-repairs-wrench",
     "hours": 2,
     "lat": 41.385,
     "lng": 2.174
