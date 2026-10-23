@@ -156,4 +156,17 @@ describe('GET /api/cards/calendar', () => {
     expect(res.status).toBe(200);
     expect(res.body[0]).toMatchObject({ startDate: '2026-11-02T00:00:00.000Z', endDate: '2026-11-05T00:00:00.000Z' });
   });
+
+  it('incluye una card activa cuyas fechas ya han pasado', async () => {
+    const ana = await createUser('uid-ana');
+    // Relativas a hoy para que sigan en el pasado se ejecute cuando se ejecute el test.
+    const now = new Date();
+    const daysAgo = (days: number) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - days));
+    const past = await createCard(ana.id, { startDate: daysAgo(32), endDate: daysAgo(30) });
+
+    const res = await getCalendarAs('uid-ana');
+
+    expect(res.status).toBe(200);
+    expect(ids(res.body)).toEqual([past.id]);
+  });
 });
